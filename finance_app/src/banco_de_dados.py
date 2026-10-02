@@ -8,6 +8,15 @@ from sqlalchemy.engine import Engine
 load_dotenv()
 
 
+class ErroBancoDeDados(Exception):
+    """Erro genérico da camada de acesso a dados.
+
+    Usada para encapsular falhas do driver/SQLAlchemy sem propagar a
+    mensagem original (que pode conter detalhes de conexão) para quem
+    chama a camada de acesso a dados.
+    """
+
+
 def obter_url_banco_de_dados() -> str:
     url = os.getenv("DATABASE_URL")
     if not url:
