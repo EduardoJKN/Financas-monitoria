@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 
 from sqlalchemy import text
@@ -8,6 +8,7 @@ from src import categorias as categorias_modulo
 from src.banco_de_dados import ErroBancoDeDados, obter_engine
 
 TIPOS_RESUMO_CATEGORIA = {"receita", "despesa"}
+PERIODOS_VALIDOS = {"este_mes", "mes_passado", "ultimos_30_dias", "este_ano"}
 
 # Saldo de cada conta = saldo_inicial + receitas - despesas
 #                        + transferências recebidas - transferências enviadas.
@@ -75,6 +76,34 @@ def _caminho_categoria(categoria_id: int | None, mapa: dict[int, dict]) -> str:
         partes.append(categoria["nome"])
         atual_id = categoria["categoria_pai_id"]
     return " > ".join(reversed(partes)) if partes else "Sem categoria"
+
+
+def calcular_intervalo_periodo(
+    periodo: str, hoje: date | None = None
+) -> tuple[date, date]:
+    """Converte um período nomeado em (data_inicial, data_final), ambas inclusivas.
+
+    Períodos personalizados não passam por aqui: a página monta o intervalo
+    diretamente a partir de dois seletores de data.
+    """
+    if periodo not in PERIODOS_VALIDOS:
+        raise ValueError(
+            f"Período inválido: '{periodo}'. Use um de {sorted(PERIODOS_VALIDOS)}."
+        )
+
+    referencia = hoje if hoje is not None else date.today()
+
+    if periodo == "este_mes":
+        return referencia.replace(day=1), referencia
+    if periodo == "ultimos_30_dias":
+        return referencia - timedelta(days=29), referencia
+    if periodo == "este_ano":
+        return referencia.replace(month=1, day=1), referencia
+
+    # mes_passado
+    primeiro_dia_mes_atual = referencia.replace(day=1)
+    ultimo_dia_mes_passado = primeiro_dia_mes_atual - timedelta(days=1)
+    return ultimo_dia_mes_passado.replace(day=1), ultimo_dia_mes_passado
 
 
 def calcular_saldo_conta(conta_id: int, ate_data: date | None = None) -> Decimal:

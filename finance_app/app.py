@@ -38,6 +38,8 @@ st.markdown(
 
     - **Visão Geral** — visão geral das finanças
     - **Lançamentos** — registrar e consultar transações
+    - **Contas** — cadastrar e gerenciar contas
+    - **Categorias** — cadastrar e gerenciar categorias
     - **Importação** — importar extratos e arquivos
     - **Metas** — acompanhar objetivos financeiros
     - **Simulador** — projetar cenários

@@ -23,6 +23,11 @@ def obter_url_banco_de_dados() -> str:
         raise ValueError(
             "DATABASE_URL não definida. Copie .env.example para .env e configure a conexão."
         )
+    if url.startswith("postgresql://"):
+        # Força o driver psycopg2 (instalado via requirements.txt) em vez de
+        # depender da resolução implícita de driver do SQLAlchemy, que pode
+        # variar entre versões.
+        url = url.replace("postgresql://", "postgresql+psycopg2://", 1)
     return url
 
 
