@@ -5,16 +5,15 @@ import pandas as pd
 import streamlit as st
 
 from src import categorias as categorias_modulo
-from src import categorizador, contas, importador, transacoes
+from src import categorizador, contas, importador, ofx as ofx_modulo, transacoes
 from src.banco_de_dados import ErroBancoDeDados
 from src.categorizador import normalizar_texto
 from src.formatacao import formatar_moeda
 
-st.set_page_config(page_title="Importação | Economia UaU", layout="wide")
 st.title("Importação")
 st.caption(
-    "Importação de extratos em CSV. Nada é salvo até você confirmar a importação "
-    "no final desta página."
+    "Importação de extratos em CSV ou OFX. Nada é salvo até você confirmar a "
+    "importação no final desta página."
 )
 
 DELIMITADORES_CANDIDATOS = importador.DELIMITADORES_CANDIDATOS
@@ -35,12 +34,12 @@ STATUS_LABEL = {
 }
 
 # =======================================================================
-# 1. Seleção e leitura do arquivo
+# Seleção do arquivo (CSV ou OFX) e da conta de destino
 # =======================================================================
-arquivo = st.file_uploader("Selecione o arquivo CSV", type=["csv"])
+arquivo = st.file_uploader("Selecione o arquivo (CSV ou OFX)", type=["csv", "ofx"])
 
 if arquivo is None:
-    st.info("Selecione um arquivo CSV para iniciar a importação.")
+    st.info("Selecione um arquivo CSV ou OFX para iniciar a importação.")
     st.stop()
 
 conteudo_bytes = arquivo.getvalue()
@@ -49,109 +48,13 @@ if not conteudo_bytes or not conteudo_bytes.strip():
     st.stop()
 
 hash_arquivo = hashlib.sha256(conteudo_bytes).hexdigest()[:12]
+eh_ofx = arquivo.name.lower().endswith(".ofx")
 
 if st.session_state.get("imp_hash_arquivo") != hash_arquivo:
     for chave in list(st.session_state.keys()):
         if chave.startswith(("imp_sel_", "imp_cat_", "imp_tipomap_")):
             del st.session_state[chave]
     st.session_state["imp_hash_arquivo"] = hash_arquivo
-
-encoding_detectado = importador.detectar_encoding(conteudo_bytes)
-if encoding_detectado is None:
-    st.error(
-        "Não foi possível identificar a codificação do arquivo. "
-        "Salve o CSV em UTF-8 e tente novamente."
-    )
-    st.stop()
-
-texto_arquivo = conteudo_bytes.decode(encoding_detectado)
-if not texto_arquivo.strip():
-    st.error("O arquivo está vazio.")
-    st.stop()
-
-delimitador_detectado = importador.detectar_delimitador(texto_arquivo) or ","
-cabecalho_detectado = importador.detectar_cabecalho(texto_arquivo)
-
-st.subheader("1. Leitura do arquivo")
-col1, col2, col3 = st.columns(3)
-with col1:
-    indice_delim = (
-        DELIMITADORES_CANDIDATOS.index(delimitador_detectado)
-        if delimitador_detectado in DELIMITADORES_CANDIDATOS
-        else 0
-    )
-    delimitador = st.selectbox(
-        "Delimitador detectado (ajuste se necessário)",
-        DELIMITADORES_CANDIDATOS,
-        index=indice_delim,
-        format_func=lambda d: ROTULOS_DELIMITADOR.get(d, d),
-        key="imp_delimitador",
-    )
-with col2:
-    encoding = st.selectbox(
-        "Codificação detectada (ajuste se necessário)",
-        ENCODINGS_CANDIDATOS,
-        index=ENCODINGS_CANDIDATOS.index(encoding_detectado),
-        key="imp_encoding",
-    )
-with col3:
-    tem_cabecalho = st.checkbox(
-        "Arquivo possui cabeçalho", value=cabecalho_detectado, key="imp_tem_cabecalho"
-    )
-
-if encoding != encoding_detectado:
-    try:
-        texto_arquivo = conteudo_bytes.decode(encoding)
-    except UnicodeDecodeError:
-        st.error(f"Não foi possível decodificar o arquivo usando '{encoding}'.")
-        st.stop()
-
-try:
-    df = pd.read_csv(
-        io.StringIO(texto_arquivo),
-        sep=delimitador,
-        header=0 if tem_cabecalho else None,
-        dtype=str,
-        keep_default_na=False,
-        engine="python",
-    )
-except Exception:
-    st.error(
-        "Não foi possível interpretar o arquivo CSV com o delimitador selecionado. "
-        "Verifique o arquivo ou ajuste o delimitador acima."
-    )
-    st.stop()
-
-if not tem_cabecalho:
-    df.columns = [f"Coluna {i + 1}" for i in range(len(df.columns))]
-df.columns = [str(c) for c in df.columns]
-
-if df.empty:
-    st.warning("O arquivo não contém linhas de dados.")
-    st.stop()
-
-st.success(f"Arquivo lido com sucesso: {len(df)} linha(s) encontradas.")
-st.dataframe(df.head(20), use_container_width=True)
-
-# =======================================================================
-# 2. Mapeamento de colunas
-# =======================================================================
-st.subheader("2. Mapeamento de colunas")
-colunas_disponiveis = list(df.columns)
-
-col_a, col_b = st.columns(2)
-with col_a:
-    col_data = st.selectbox("Coluna de Data", colunas_disponiveis, key="imp_col_data")
-    col_valor = st.selectbox("Coluna de Valor", colunas_disponiveis, key="imp_col_valor")
-with col_b:
-    col_descricao = st.selectbox(
-        "Coluna de Descrição", colunas_disponiveis, key="imp_col_descricao"
-    )
-    col_tipo_opcoes = ["(nenhuma)"] + colunas_disponiveis
-    col_tipo_label = st.selectbox(
-        "Coluna de Tipo (opcional)", col_tipo_opcoes, key="imp_col_tipo"
-    )
-    col_tipo = None if col_tipo_label == "(nenhuma)" else col_tipo_label
 
 try:
     contas_ativas = contas.listar_contas(incluir_inativas=False)
@@ -171,35 +74,167 @@ conta_id_importacao = st.selectbox(
     key="imp_conta_id",
 )
 
-mapeamento_tipo: dict[str, str | None] = {}
-if col_tipo is not None:
-    st.markdown("**Mapeamento dos valores da coluna de Tipo**")
-    valores_distintos = sorted(
-        {str(v).strip() for v in df[col_tipo].tolist() if str(v).strip()}
-    )
-    if not valores_distintos:
-        st.info("A coluna de tipo selecionada não contém valores preenchidos.")
-    for valor_bruto_tipo in valores_distintos:
-        normalizado = normalizar_texto(valor_bruto_tipo)
-        if any(p in normalizado for p in ("receit", "credit", "entrada")):
-            padrao = "Receita"
-        elif any(p in normalizado for p in ("despes", "debit", "saida", "saída")):
-            padrao = "Despesa"
-        else:
-            padrao = "Não importar (transferência/outro)"
-        rotulos_opcao = list(TIPO_MAPEAMENTO_OPCOES.keys())
-        escolha = st.selectbox(
-            f"Valor '{valor_bruto_tipo}' representa:",
-            rotulos_opcao,
-            index=rotulos_opcao.index(padrao),
-            key=f"imp_tipomap_{hash_arquivo}_{valor_bruto_tipo}",
-        )
-        mapeamento_tipo[valor_bruto_tipo] = TIPO_MAPEAMENTO_OPCOES[escolha]
+linhas_processadas: list[dict] = []
 
 # =======================================================================
-# 3. Processamento: parsing, tipo, categorização e duplicidade
+# Leitura: OFX (direto) ou CSV (detecção + mapeamento de colunas)
 # =======================================================================
-st.subheader("3. Pré-visualização, categorização e duplicidade")
+if eh_ofx:
+    st.subheader("Leitura do arquivo OFX")
+    try:
+        linhas_processadas = ofx_modulo.ler_transacoes_ofx(conteudo_bytes)
+    except ValueError as exc:
+        st.error(str(exc))
+        st.stop()
+    st.success(
+        f"Arquivo OFX lido com sucesso: {len(linhas_processadas)} transação(ões) encontradas."
+    )
+    st.caption(
+        "Tipo (receita/despesa) definido automaticamente pelo sinal do valor, "
+        "como em um CSV sem coluna de tipo."
+    )
+
+else:
+    st.subheader("Leitura do arquivo CSV")
+
+    encoding_detectado = importador.detectar_encoding(conteudo_bytes)
+    if encoding_detectado is None:
+        st.error(
+            "Não foi possível identificar a codificação do arquivo. "
+            "Salve o CSV em UTF-8 e tente novamente."
+        )
+        st.stop()
+
+    texto_arquivo = conteudo_bytes.decode(encoding_detectado)
+    if not texto_arquivo.strip():
+        st.error("O arquivo está vazio.")
+        st.stop()
+
+    delimitador_detectado = importador.detectar_delimitador(texto_arquivo) or ","
+    cabecalho_detectado = importador.detectar_cabecalho(texto_arquivo)
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        indice_delim = (
+            DELIMITADORES_CANDIDATOS.index(delimitador_detectado)
+            if delimitador_detectado in DELIMITADORES_CANDIDATOS
+            else 0
+        )
+        delimitador = st.selectbox(
+            "Delimitador detectado (ajuste se necessário)",
+            DELIMITADORES_CANDIDATOS,
+            index=indice_delim,
+            format_func=lambda d: ROTULOS_DELIMITADOR.get(d, d),
+            key="imp_delimitador",
+        )
+    with col2:
+        encoding = st.selectbox(
+            "Codificação detectada (ajuste se necessário)",
+            ENCODINGS_CANDIDATOS,
+            index=ENCODINGS_CANDIDATOS.index(encoding_detectado),
+            key="imp_encoding",
+        )
+    with col3:
+        tem_cabecalho = st.checkbox(
+            "Arquivo possui cabeçalho", value=cabecalho_detectado, key="imp_tem_cabecalho"
+        )
+
+    if encoding != encoding_detectado:
+        try:
+            texto_arquivo = conteudo_bytes.decode(encoding)
+        except UnicodeDecodeError:
+            st.error(f"Não foi possível decodificar o arquivo usando '{encoding}'.")
+            st.stop()
+
+    try:
+        df = pd.read_csv(
+            io.StringIO(texto_arquivo),
+            sep=delimitador,
+            header=0 if tem_cabecalho else None,
+            dtype=str,
+            keep_default_na=False,
+            engine="python",
+        )
+    except Exception:
+        st.error(
+            "Não foi possível interpretar o arquivo CSV com o delimitador selecionado. "
+            "Verifique o arquivo ou ajuste o delimitador acima."
+        )
+        st.stop()
+
+    if not tem_cabecalho:
+        df.columns = [f"Coluna {i + 1}" for i in range(len(df.columns))]
+    df.columns = [str(c) for c in df.columns]
+
+    if df.empty:
+        st.warning("O arquivo não contém linhas de dados.")
+        st.stop()
+
+    st.success(f"Arquivo lido com sucesso: {len(df)} linha(s) encontradas.")
+    st.dataframe(df.head(20), use_container_width=True)
+
+    st.subheader("Mapeamento de colunas")
+    colunas_disponiveis = list(df.columns)
+
+    col_a, col_b = st.columns(2)
+    with col_a:
+        col_data = st.selectbox("Coluna de Data", colunas_disponiveis, key="imp_col_data")
+        col_valor = st.selectbox("Coluna de Valor", colunas_disponiveis, key="imp_col_valor")
+    with col_b:
+        col_descricao = st.selectbox(
+            "Coluna de Descrição", colunas_disponiveis, key="imp_col_descricao"
+        )
+        col_tipo_opcoes = ["(nenhuma)"] + colunas_disponiveis
+        col_tipo_label = st.selectbox(
+            "Coluna de Tipo (opcional)", col_tipo_opcoes, key="imp_col_tipo"
+        )
+        col_tipo = None if col_tipo_label == "(nenhuma)" else col_tipo_label
+
+    mapeamento_tipo: dict[str, str | None] = {}
+    if col_tipo is not None:
+        st.markdown("**Mapeamento dos valores da coluna de Tipo**")
+        valores_distintos = sorted(
+            {str(v).strip() for v in df[col_tipo].tolist() if str(v).strip()}
+        )
+        if not valores_distintos:
+            st.info("A coluna de tipo selecionada não contém valores preenchidos.")
+        for valor_bruto_tipo in valores_distintos:
+            normalizado = normalizar_texto(valor_bruto_tipo)
+            if any(p in normalizado for p in ("receit", "credit", "entrada")):
+                padrao = "Receita"
+            elif any(p in normalizado for p in ("despes", "debit", "saida", "saída")):
+                padrao = "Despesa"
+            else:
+                padrao = "Não importar (transferência/outro)"
+            rotulos_opcao = list(TIPO_MAPEAMENTO_OPCOES.keys())
+            escolha = st.selectbox(
+                f"Valor '{valor_bruto_tipo}' representa:",
+                rotulos_opcao,
+                index=rotulos_opcao.index(padrao),
+                key=f"imp_tipomap_{hash_arquivo}_{valor_bruto_tipo}",
+            )
+            mapeamento_tipo[valor_bruto_tipo] = TIPO_MAPEAMENTO_OPCOES[escolha]
+
+    for idx, linha_df in df.iterrows():
+        data_bruta = str(linha_df[col_data])
+        descricao_bruta = str(linha_df[col_descricao])
+        valor_bruto = str(linha_df[col_valor])
+        tipo_bruto = str(linha_df[col_tipo]) if col_tipo is not None else None
+
+        linha = importador.processar_linha(
+            data_bruta=data_bruta,
+            descricao_bruta=descricao_bruta,
+            valor_bruto=valor_bruto,
+            tipo_bruto=tipo_bruto,
+            mapeamento_tipo=mapeamento_tipo if col_tipo is not None else None,
+        )
+        linha["indice"] = idx
+        linhas_processadas.append(linha)
+
+# =======================================================================
+# A partir daqui, o pipeline é o mesmo para CSV e OFX
+# =======================================================================
+st.subheader("Pré-visualização, categorização e duplicidade")
 
 try:
     categorias_todas = categorias_modulo.listar_categorias(incluir_inativas=True)
@@ -226,26 +261,7 @@ def caminho_categoria_imp(categoria_id: int | None) -> str:
     return " > ".join(reversed(partes)) if partes else "Sem categoria"
 
 
-linhas_processadas = []
-datas_validas = []
-
-for idx, linha_df in df.iterrows():
-    data_bruta = str(linha_df[col_data])
-    descricao_bruta = str(linha_df[col_descricao])
-    valor_bruto = str(linha_df[col_valor])
-    tipo_bruto = str(linha_df[col_tipo]) if col_tipo is not None else None
-
-    linha = importador.processar_linha(
-        data_bruta=data_bruta,
-        descricao_bruta=descricao_bruta,
-        valor_bruto=valor_bruto,
-        tipo_bruto=tipo_bruto,
-        mapeamento_tipo=mapeamento_tipo if col_tipo is not None else None,
-    )
-    linha["indice"] = idx
-    linhas_processadas.append(linha)
-    if linha["data"] is not None:
-        datas_validas.append(linha["data"])
+datas_validas = [linha["data"] for linha in linhas_processadas if linha["data"] is not None]
 
 # --- detecção de duplicidade (conta + data + tipo + valor + descrição normalizada) ---
 if datas_validas:
@@ -357,7 +373,7 @@ for linha in linhas_processadas:
     colunas[6].write(f"{STATUS_LABEL.get(linha['status'], '')} {linha['mensagem']}")
 
 # =======================================================================
-# 4. Confirmação e importação
+# Confirmação e importação
 # =======================================================================
 st.divider()
 

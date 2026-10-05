@@ -4,7 +4,6 @@ from src import metas, simulador
 from src.banco_de_dados import ErroBancoDeDados
 from src.formatacao import formatar_moeda, texto_para_decimal
 
-st.set_page_config(page_title="Simulador | Economia UaU", layout="wide")
 st.title("Simulador")
 st.caption("Projeções simples, sem considerar rendimento/juros nesta primeira versão.")
 

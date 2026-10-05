@@ -11,7 +11,6 @@ from src.graficos import (
     grafico_saldos_por_conta,
 )
 
-st.set_page_config(page_title="Visão Geral | Economia UaU", layout="wide")
 st.title("Visão Geral")
 
 OPCOES_PERIODO = {
@@ -49,6 +48,7 @@ try:
         data_inicial, data_final, tipo="despesa"
     )
     evolucao_mensal = resumo.resumir_por_mes(data_inicial, data_final)
+    indicadores_cartoes = resumo.calcular_indicadores_cartoes()
 except (ValueError, ErroBancoDeDados) as exc:
     st.error(str(exc))
     st.stop()
@@ -82,3 +82,16 @@ if not evolucao_mensal:
     st.info("Sem dados suficientes para exibir a evolução mensal no período selecionado.")
 else:
     st.plotly_chart(grafico_evolucao_mensal(evolucao_mensal), use_container_width=True)
+
+if indicadores_cartoes["cartoes"]:
+    st.divider()
+    st.subheader("Cartões de crédito")
+    col_c1, col_c2 = st.columns(2)
+    col_c1.metric("Faturas abertas", indicadores_cartoes["total_faturas_abertas"])
+    col_c2.metric("Faturas a vencer", indicadores_cartoes["total_faturas_a_vencer"])
+    for info in indicadores_cartoes["cartoes"]:
+        st.write(
+            f"**{info['nome']}** — limite {formatar_moeda(info['limite'])} · "
+            f"utilizado {formatar_moeda(info['limite_utilizado'])} · "
+            f"disponível {formatar_moeda(info['limite_disponivel'])}"
+        )

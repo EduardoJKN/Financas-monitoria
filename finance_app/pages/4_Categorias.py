@@ -3,7 +3,6 @@ import streamlit as st
 from src import categorias, categorizador
 from src.banco_de_dados import ErroBancoDeDados
 
-st.set_page_config(page_title="Categorias | Economia UaU", layout="wide")
 st.title("Categorias")
 
 TIPOS_LABEL = {"receita": "Receita", "despesa": "Despesa", "ambos": "Ambos"}

@@ -4,7 +4,6 @@ from src import contas
 from src.banco_de_dados import ErroBancoDeDados
 from src.formatacao import formatar_moeda, texto_para_decimal
 
-st.set_page_config(page_title="Contas | Economia UaU", layout="wide")
 st.title("Contas")
 
 TIPOS_LABEL = {

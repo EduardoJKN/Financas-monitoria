@@ -4,16 +4,22 @@ from decimal import Decimal
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
+from src import cartoes as cartoes_modulo
 from src import categorias as categorias_modulo
+from src import faturas as faturas_modulo
 from src.banco_de_dados import ErroBancoDeDados, obter_engine
 
 TIPOS_RESUMO_CATEGORIA = {"receita", "despesa"}
 PERIODOS_VALIDOS = {"este_mes", "mes_passado", "ultimos_30_dias", "este_ano"}
 
-# Saldo de cada conta = saldo_inicial + receitas - despesas
-#                        + transferências recebidas - transferências enviadas.
-# Contas inativas não são filtradas aqui de propósito: elas continuam
-# participando de cálculos históricos, pois podem ter transações associadas.
+# Saldo de cada conta = saldo_inicial + receitas - despesas pagas pela conta
+#                        + transferências recebidas - transferências enviadas
+#                        - pagamentos de fatura feitos pela conta.
+# Despesas no cartão (conta_id NULL) não entram aqui: elas só afetam o saldo
+# bancário quando a fatura é paga (pagamentos_fatura), evitando dupla
+# contagem. Contas inativas não são filtradas aqui de propósito: elas
+# continuam participando de cálculos históricos, pois podem ter transações
+# associadas.
 _SQL_SALDOS = """
     WITH movimentos AS (
         SELECT
@@ -33,6 +39,12 @@ _SQL_SALDOS = """
             data_transacao
         FROM transacoes
         WHERE tipo = 'transferencia' AND conta_destino_id IS NOT NULL
+        UNION ALL
+        SELECT
+            conta_id,
+            -valor AS efeito,
+            data_pagamento AS data_transacao
+        FROM pagamentos_fatura
     ),
     agregado AS (
         SELECT conta_id, SUM(efeito) AS total
@@ -292,3 +304,47 @@ def resumir_por_mes(
             }
         )
     return resultado
+
+
+def calcular_indicadores_cartoes(hoje: date | None = None) -> dict:
+    """Indicadores de cartões para a Visão Geral: quantidade de faturas
+    abertas, quantidade de faturas fechadas/parciais ainda a vencer, e
+    limite utilizado/disponível por cartão ativo.
+
+    Compras no cartão não reduzem o saldo bancário (isso só acontece quando
+    a fatura é paga); o resultado financeiro do período já conta a compra
+    como despesa na data da compra, e o pagamento da fatura nunca é
+    recontado como despesa — ambos calculados em outras funções deste
+    módulo, sem necessidade de nenhum saldo "inventado" aqui.
+    """
+    referencia = hoje if hoje is not None else date.today()
+    cartoes_ativos = cartoes_modulo.listar_cartoes(incluir_inativos=False)
+
+    total_faturas_abertas = 0
+    total_faturas_a_vencer = 0
+    info_cartoes = []
+
+    for cartao in cartoes_ativos:
+        for fatura in faturas_modulo.listar_faturas(cartao_id=cartao["id"]):
+            status = faturas_modulo.status_exibicao_fatura(fatura, hoje=referencia)
+            if status == "aberta":
+                total_faturas_abertas += 1
+            elif status in ("fechada", "parcial") and fatura["data_vencimento"] >= referencia:
+                total_faturas_a_vencer += 1
+
+        limite_utilizado = faturas_modulo.calcular_limite_utilizado(cartao["id"])
+        info_cartoes.append(
+            {
+                "cartao_id": cartao["id"],
+                "nome": cartao["nome"],
+                "limite": cartao["limite"],
+                "limite_utilizado": limite_utilizado,
+                "limite_disponivel": cartao["limite"] - limite_utilizado,
+            }
+        )
+
+    return {
+        "total_faturas_abertas": total_faturas_abertas,
+        "total_faturas_a_vencer": total_faturas_a_vencer,
+        "cartoes": info_cartoes,
+    }

@@ -1,15 +1,17 @@
 import uuid
 from datetime import date
-from decimal import Decimal
+from decimal import ROUND_DOWN, Decimal
 
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import SQLAlchemyError
 
+from src import faturas
 from src.banco_de_dados import ErroBancoDeDados, obter_engine
+from src.datas import avancar_meses
 
 TIPOS_TRANSACAO = {"receita", "despesa", "transferencia"}
-ORIGENS_TRANSACAO = {"manual", "importacao"}
+ORIGENS_TRANSACAO = {"manual", "importacao", "recorrencia"}
 
 _NAO_INFORMADO = object()
 
@@ -107,16 +109,44 @@ def _tipo_categoria_compativel(tipo_categoria: str, tipo_transacao: str) -> bool
     return tipo_categoria == "ambos" or tipo_categoria == tipo_transacao
 
 
-def _validar_contas_e_categoria(
+def _validar_cartao_ativo(conn: Connection, cartao_id: int) -> dict:
+    cartao = (
+        conn.execute(text("SELECT * FROM cartoes WHERE id = :id"), {"id": cartao_id})
+        .mappings()
+        .first()
+    )
+    if cartao is None:
+        raise ValueError(f"Cartão {cartao_id} não encontrado.")
+    if not cartao["ativo"]:
+        raise ValueError(f"Cartão {cartao_id} está inativo.")
+    return dict(cartao)
+
+
+def _validar_forma_pagamento_e_categoria(
     conn: Connection,
     tipo: str,
-    conta_id: int,
+    conta_id: int | None,
+    cartao_id: int | None,
     conta_destino_id: int | None,
     categoria_id: int | None,
-) -> None:
-    _validar_conta_ativa(conn, conta_id, "conta_id")
+) -> dict | None:
+    """Valida conta/cartão/categoria conforme o tipo da transação.
+
+    Receita e transferência sempre exigem conta_id (nunca cartao_id).
+    Despesa exige exatamente uma forma de pagamento: conta_id OU cartao_id.
+
+    Retorna o dict do cartão quando a despesa é no cartão (para a chamada
+    resolver a fatura correspondente), ou None quando a forma de pagamento é
+    conta bancária.
+    """
+    cartao = None
 
     if tipo == "transferencia":
+        if cartao_id is not None:
+            raise ValueError("Transferência não pode usar cartao_id.")
+        if conta_id is None:
+            raise ValueError("Transferência exige conta_id.")
+        _validar_conta_ativa(conn, conta_id, "conta_id")
         if conta_destino_id is None:
             raise ValueError("Transferência exige conta_destino_id.")
         if conta_destino_id == conta_id:
@@ -126,16 +156,38 @@ def _validar_contas_e_categoria(
         _validar_conta_ativa(conn, conta_destino_id, "conta_destino_id")
         if categoria_id is not None:
             raise ValueError("Transferência não pode ter categoria_id.")
-    else:
+
+    elif tipo == "receita":
+        if cartao_id is not None:
+            raise ValueError("Receita não pode usar cartao_id (sempre exige conta_id).")
+        if conta_id is None:
+            raise ValueError("Receita exige conta_id.")
+        _validar_conta_ativa(conn, conta_id, "conta_id")
         if conta_destino_id is not None:
-            raise ValueError(f"conta_destino_id deve ser None para tipo '{tipo}'.")
-        if categoria_id is not None:
-            categoria = _validar_categoria_ativa(conn, categoria_id)
-            if not _tipo_categoria_compativel(categoria["tipo"], tipo):
-                raise ValueError(
-                    f"Categoria do tipo '{categoria['tipo']}' incompatível com "
-                    f"transação do tipo '{tipo}'."
-                )
+            raise ValueError("conta_destino_id deve ser None para tipo 'receita'.")
+
+    else:  # despesa
+        if conta_destino_id is not None:
+            raise ValueError("conta_destino_id deve ser None para tipo 'despesa'.")
+        if (conta_id is None) == (cartao_id is None):
+            raise ValueError(
+                "Uma despesa deve ter exatamente uma forma de pagamento: "
+                "conta_id OU cartao_id (nunca os dois, nunca nenhum)."
+            )
+        if conta_id is not None:
+            _validar_conta_ativa(conn, conta_id, "conta_id")
+        else:
+            cartao = _validar_cartao_ativo(conn, cartao_id)
+
+    if tipo != "transferencia" and categoria_id is not None:
+        categoria = _validar_categoria_ativa(conn, categoria_id)
+        if not _tipo_categoria_compativel(categoria["tipo"], tipo):
+            raise ValueError(
+                f"Categoria do tipo '{categoria['tipo']}' incompatível com "
+                f"transação do tipo '{tipo}'."
+            )
+
+    return cartao
 
 
 # ---------------------------------------------------------------------
@@ -146,7 +198,8 @@ def criar_transacao(
     descricao: str,
     valor: Decimal,
     data_transacao: date,
-    conta_id: int,
+    conta_id: int | None = None,
+    cartao_id: int | None = None,
     conta_destino_id: int | None = None,
     categoria_id: int | None = None,
     origem: str = "manual",
@@ -155,6 +208,9 @@ def criar_transacao(
     numero_parcela: int | None = None,
     total_parcelas: int | None = None,
 ) -> int:
+    """Cria uma transação. Para despesas, informe conta_id OU cartao_id
+    (nunca os dois). Receita e transferência sempre usam conta_id.
+    """
     _validar_tipo(tipo)
     _validar_origem(origem)
     _validar_descricao(descricao)
@@ -164,18 +220,24 @@ def criar_transacao(
 
     try:
         with obter_engine().begin() as conn:
-            _validar_contas_e_categoria(conn, tipo, conta_id, conta_destino_id, categoria_id)
+            cartao = _validar_forma_pagamento_e_categoria(
+                conn, tipo, conta_id, cartao_id, conta_destino_id, categoria_id
+            )
+
+            fatura_id = None
+            if cartao is not None:
+                fatura_id = faturas.obter_ou_criar_fatura(conn, cartao, data_transacao)["id"]
 
             resultado = conn.execute(
                 text(
                     """
                     INSERT INTO transacoes (
                         tipo, descricao, valor, data_transacao, categoria_id,
-                        conta_id, conta_destino_id, observacao, origem,
+                        conta_id, cartao_id, fatura_id, conta_destino_id, observacao, origem,
                         grupo_parcelamento, numero_parcela, total_parcelas
                     ) VALUES (
                         :tipo, :descricao, :valor, :data_transacao, :categoria_id,
-                        :conta_id, :conta_destino_id, :observacao, :origem,
+                        :conta_id, :cartao_id, :fatura_id, :conta_destino_id, :observacao, :origem,
                         :grupo_parcelamento, :numero_parcela, :total_parcelas
                     )
                     RETURNING id
@@ -188,6 +250,8 @@ def criar_transacao(
                     "data_transacao": data_transacao,
                     "categoria_id": categoria_id,
                     "conta_id": conta_id,
+                    "cartao_id": cartao_id,
+                    "fatura_id": fatura_id,
                     "conta_destino_id": conta_destino_id,
                     "observacao": observacao,
                     "origem": origem,
@@ -199,6 +263,130 @@ def criar_transacao(
             return resultado.scalar_one()
     except SQLAlchemyError as exc:
         raise ErroBancoDeDados("Falha ao criar transação.") from exc
+
+
+def _validar_total_parcelas(total_parcelas: int) -> None:
+    if (
+        not isinstance(total_parcelas, int)
+        or isinstance(total_parcelas, bool)
+        or total_parcelas < 2
+    ):
+        raise ValueError("total_parcelas deve ser um inteiro maior ou igual a 2.")
+
+
+def calcular_parcelas(valor_total: Decimal, total_parcelas: int) -> list[Decimal]:
+    """Divide valor_total em total_parcelas valores que somam exatamente
+    valor_total. O resto de centavos (por arredondamento para baixo nas
+    primeiras parcelas) é absorvido pela última parcela.
+    """
+    _validar_valor(valor_total)
+    _validar_total_parcelas(total_parcelas)
+
+    valor_parcela_base = (valor_total / total_parcelas).quantize(
+        Decimal("0.01"), rounding=ROUND_DOWN
+    )
+    soma_parcelas_iniciais = valor_parcela_base * (total_parcelas - 1)
+    valor_ultima_parcela = valor_total - soma_parcelas_iniciais
+    return [valor_parcela_base] * (total_parcelas - 1) + [valor_ultima_parcela]
+
+
+def simular_parcelas(
+    valor_total: Decimal, data_primeira_parcela: date, total_parcelas: int
+) -> list[dict]:
+    """Pré-visualização das parcelas (sem tocar o banco): número, data e valor."""
+    _validar_data(data_primeira_parcela)
+    valores = calcular_parcelas(valor_total, total_parcelas)
+    return [
+        {
+            "numero_parcela": indice + 1,
+            "data": avancar_meses(data_primeira_parcela, indice),
+            "valor": valor,
+        }
+        for indice, valor in enumerate(valores)
+    ]
+
+
+def criar_transacao_parcelada(
+    tipo: str,
+    descricao: str,
+    valor_total: Decimal,
+    data_primeira_parcela: date,
+    total_parcelas: int,
+    conta_id: int | None = None,
+    cartao_id: int | None = None,
+    categoria_id: int | None = None,
+    observacao: str | None = None,
+    origem: str = "manual",
+) -> list[int]:
+    """Cria uma transação por parcela, todas compartilhando um único
+    grupo_parcelamento. Operação atômica: ou todas as parcelas são criadas,
+    ou nenhuma (uma única transação de banco de dados).
+
+    Parcelamento não é permitido para transferências. Quando pago no cartão
+    (cartao_id), cada parcela é lançada na fatura correspondente ao seu
+    próprio mês (uma parcela pode cair em faturas diferentes).
+    """
+    if tipo not in ("receita", "despesa"):
+        raise ValueError(
+            "Parcelamento só é permitido para 'receita' ou 'despesa' (nunca 'transferencia')."
+        )
+    _validar_origem(origem)
+    _validar_descricao(descricao)
+    _validar_data(data_primeira_parcela)
+
+    valores_parcelas = calcular_parcelas(valor_total, total_parcelas)
+    grupo_parcelamento = uuid.uuid4()
+
+    try:
+        with obter_engine().begin() as conn:
+            cartao = _validar_forma_pagamento_e_categoria(
+                conn, tipo, conta_id, cartao_id, None, categoria_id
+            )
+
+            ids_criados = []
+            for indice, valor_parcela in enumerate(valores_parcelas):
+                numero_parcela = indice + 1
+                data_parcela = avancar_meses(data_primeira_parcela, indice)
+
+                fatura_id = None
+                if cartao is not None:
+                    fatura_id = faturas.obter_ou_criar_fatura(conn, cartao, data_parcela)["id"]
+
+                resultado = conn.execute(
+                    text(
+                        """
+                        INSERT INTO transacoes (
+                            tipo, descricao, valor, data_transacao, categoria_id,
+                            conta_id, cartao_id, fatura_id, observacao, origem,
+                            grupo_parcelamento, numero_parcela, total_parcelas
+                        ) VALUES (
+                            :tipo, :descricao, :valor, :data_transacao, :categoria_id,
+                            :conta_id, :cartao_id, :fatura_id, :observacao, :origem,
+                            :grupo_parcelamento, :numero_parcela, :total_parcelas
+                        )
+                        RETURNING id
+                        """
+                    ),
+                    {
+                        "tipo": tipo,
+                        "descricao": descricao,
+                        "valor": valor_parcela,
+                        "data_transacao": data_parcela,
+                        "categoria_id": categoria_id,
+                        "conta_id": conta_id,
+                        "cartao_id": cartao_id,
+                        "fatura_id": fatura_id,
+                        "observacao": observacao,
+                        "origem": origem,
+                        "grupo_parcelamento": grupo_parcelamento,
+                        "numero_parcela": numero_parcela,
+                        "total_parcelas": total_parcelas,
+                    },
+                )
+                ids_criados.append(resultado.scalar_one())
+            return ids_criados
+    except SQLAlchemyError as exc:
+        raise ErroBancoDeDados("Falha ao criar transação parcelada.") from exc
 
 
 def obter_transacao(id: int) -> dict | None:
@@ -282,7 +470,8 @@ def atualizar_transacao(
     descricao: str | None = None,
     valor: Decimal | None = None,
     data_transacao: date | None = None,
-    conta_id: int | None = None,
+    conta_id=_NAO_INFORMADO,
+    cartao_id=_NAO_INFORMADO,
     conta_destino_id=_NAO_INFORMADO,
     categoria_id=_NAO_INFORMADO,
     origem: str | None = None,
@@ -291,6 +480,12 @@ def atualizar_transacao(
     numero_parcela=_NAO_INFORMADO,
     total_parcelas=_NAO_INFORMADO,
 ) -> None:
+    """conta_id e cartao_id usam o sentinela _NAO_INFORMADO (não um simples
+    None) porque None passou a ser um valor legítimo para ambos (uma despesa
+    no cartão tem conta_id=None; uma despesa na conta tem cartao_id=None).
+    fatura_id nunca é aceito como parâmetro: é sempre recalculado a partir de
+    cartao_id + data_transacao.
+    """
     try:
         with obter_engine().begin() as conn:
             atual = conn.execute(
@@ -306,7 +501,10 @@ def atualizar_transacao(
                 "data_transacao": (
                     data_transacao if data_transacao is not None else atual["data_transacao"]
                 ),
-                "conta_id": conta_id if conta_id is not None else atual["conta_id"],
+                "conta_id": conta_id if conta_id is not _NAO_INFORMADO else atual["conta_id"],
+                "cartao_id": (
+                    cartao_id if cartao_id is not _NAO_INFORMADO else atual["cartao_id"]
+                ),
                 "conta_destino_id": (
                     conta_destino_id
                     if conta_destino_id is not _NAO_INFORMADO
@@ -346,12 +544,19 @@ def atualizar_transacao(
                 estado_final["total_parcelas"],
                 estado_final["grupo_parcelamento"],
             )
-            _validar_contas_e_categoria(
+            cartao = _validar_forma_pagamento_e_categoria(
                 conn,
                 estado_final["tipo"],
                 estado_final["conta_id"],
+                estado_final["cartao_id"],
                 estado_final["conta_destino_id"],
                 estado_final["categoria_id"],
+            )
+
+            estado_final["fatura_id"] = (
+                faturas.obter_ou_criar_fatura(conn, cartao, estado_final["data_transacao"])["id"]
+                if cartao is not None
+                else None
             )
 
             atribuicoes = ", ".join(f"{coluna} = :{coluna}" for coluna in estado_final)

@@ -18,6 +18,11 @@ if not database_url:
     raise RuntimeError(
         "DATABASE_URL não definida. Copie .env.example para .env e configure a conexão."
     )
+if database_url.startswith("postgresql://"):
+    # Mesmo ajuste de src/banco_de_dados.py: força o driver psycopg2
+    # (instalado via requirements.txt) em vez da resolução implícita do
+    # SQLAlchemy, que pode variar entre versões.
+    database_url = database_url.replace("postgresql://", "postgresql+psycopg2://", 1)
 config.set_main_option("sqlalchemy.url", database_url)
 
 if config.config_file_name is not None:
