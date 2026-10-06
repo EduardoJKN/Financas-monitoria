@@ -8,7 +8,7 @@ from src import categorias as categorias_modulo
 from src import categorizador, contas, importador, ofx as ofx_modulo, transacoes
 from src.banco_de_dados import ErroBancoDeDados
 from src.categorizador import normalizar_texto
-from src.formatacao import formatar_moeda
+from src.formatacao import badge_tipo_transacao, formatar_moeda
 
 st.title("Importação")
 st.caption(
@@ -318,7 +318,11 @@ titulos_prev = ["Importar", "Data", "Descrição", "Tipo", "Valor", "Categoria",
 for coluna, titulo in zip(st.columns(larguras_prev), titulos_prev):
     coluna.markdown(f"**{titulo}**")
 
-TIPO_LABEL_IMPORT = {"receita": "Receita", "despesa": "Despesa", None: "—"}
+TIPO_LABEL_IMPORT = {
+    "receita": badge_tipo_transacao("receita"),
+    "despesa": badge_tipo_transacao("despesa"),
+    None: "⚪ —",
+}
 
 for linha in linhas_processadas:
     colunas = st.columns(larguras_prev)

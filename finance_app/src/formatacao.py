@@ -1,6 +1,31 @@
-"""Formatação e parsing de valores monetários no padrão brasileiro."""
+"""Formatação e parsing de valores monetários no padrão brasileiro, e
+identificação visual (badges) por tipo de lançamento."""
 
 from decimal import Decimal, InvalidOperation
+
+BADGES_TIPO_TRANSACAO = {
+    "receita": "🟢 Receita",
+    "despesa": "🔴 Despesa",
+    "transferencia": "🔵 Transferência",
+}
+
+
+def badge_tipo_transacao(tipo: str | None) -> str:
+    """Rótulo com identificação visual (cor por emoji) do tipo de lançamento.
+
+    Nunca levanta erro: tipos desconhecidos ou None caem em um rótulo neutro,
+    em vez de quebrar a interface.
+    """
+    if tipo in BADGES_TIPO_TRANSACAO:
+        return BADGES_TIPO_TRANSACAO[tipo]
+    if not tipo:
+        return "⚪ —"
+    return f"⚪ {str(tipo).capitalize()}"
+
+
+def badge_pagamento_fatura() -> str:
+    """Identificação visual (roxo) para pagamento de fatura de cartão."""
+    return "🟣 Pagamento de fatura"
 
 
 def formatar_moeda(valor: Decimal) -> str:

@@ -4,15 +4,15 @@ import streamlit as st
 
 from src import cartoes, contas, faturas
 from src.banco_de_dados import ErroBancoDeDados
-from src.formatacao import formatar_moeda, texto_para_decimal
+from src.formatacao import badge_pagamento_fatura, formatar_moeda, texto_para_decimal
 
 st.title("Cartões")
 
 STATUS_LABEL = {
     "aberta": "Aberta",
     "fechada": "Fechada (aguardando pagamento)",
-    "parcial": "Parcialmente paga",
-    "paga": "Paga",
+    "parcial": "🟣 Parcialmente paga",
+    "paga": "🟣 Paga",
 }
 
 # ---------------------------------------------------------------------
@@ -263,7 +263,7 @@ def _registrar_pagamento(fatura_id: int) -> None:
             faturas.registrar_pagamento_fatura(
                 fatura_id, conta_pagamento_escolhida, valor_decimal, data_pagamento
             )
-            _definir_mensagem("Pagamento registrado com sucesso.")
+            _definir_mensagem(f"{badge_pagamento_fatura()} registrado com sucesso.")
             st.session_state["cartao_pagar_fatura_id"] = None
             st.rerun()
         except (ValueError, ErroBancoDeDados) as exc:

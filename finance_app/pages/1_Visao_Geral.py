@@ -55,8 +55,8 @@ except (ValueError, ErroBancoDeDados) as exc:
 
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("Saldo total atual", formatar_moeda(saldo_total))
-col2.metric("Receitas do período", formatar_moeda(resumo_periodo["total_receitas"]))
-col3.metric("Despesas do período", formatar_moeda(resumo_periodo["total_despesas"]))
+col2.metric("🟢 Receitas do período", formatar_moeda(resumo_periodo["total_receitas"]))
+col3.metric("🔴 Despesas do período", formatar_moeda(resumo_periodo["total_despesas"]))
 col4.metric("Resultado do período", formatar_moeda(resumo_periodo["resultado"]))
 
 st.divider()
@@ -69,7 +69,7 @@ else:
         rotulo = item["nome"] if item["ativa"] else f"{item['nome']} (inativa)"
         st.write(f"**{rotulo}:** {formatar_moeda(item['saldo'])}")
 
-st.subheader("Despesas por categoria")
+st.subheader("🔴 Despesas por categoria")
 if not despesas_categoria:
     st.info("Nenhuma despesa registrada no período selecionado.")
 else:

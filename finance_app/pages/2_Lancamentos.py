@@ -5,11 +5,11 @@ import streamlit as st
 
 from src import cartoes, categorias, contas, recorrencias, transacoes
 from src.banco_de_dados import ErroBancoDeDados
-from src.formatacao import formatar_moeda, texto_para_decimal
+from src.formatacao import badge_tipo_transacao, formatar_moeda, texto_para_decimal
 
 st.title("Lançamentos")
 
-TIPOS_LABEL = {"receita": "Receita", "despesa": "Despesa", "transferencia": "Transferência"}
+TIPOS_LABEL = {t: badge_tipo_transacao(t) for t in ("receita", "despesa", "transferencia")}
 TIPOS_INTERNO = {rotulo: interno for interno, rotulo in TIPOS_LABEL.items()}
 _texto_para_decimal = texto_para_decimal
 _formatar_valor = formatar_moeda

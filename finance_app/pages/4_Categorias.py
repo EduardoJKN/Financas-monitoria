@@ -2,6 +2,7 @@ import streamlit as st
 
 from src import categorias, categorizador
 from src.banco_de_dados import ErroBancoDeDados
+from src.formatacao import badge_tipo_transacao, formatar_moeda
 
 st.title("Categorias")
 
@@ -342,8 +343,9 @@ else:
                         ativa=ativa_regra,
                     )
                     _definir_mensagem_regra("Regra atualizada com sucesso.")
+                    regra_id_salva = regra_editando_id
                 else:
-                    categorizador.criar_regra(
+                    regra_id_salva = categorizador.criar_regra(
                         texto_busca=texto_busca,
                         operador=operador,
                         categoria_id=categoria_id_regra,
@@ -352,6 +354,9 @@ else:
                     _definir_mensagem_regra("Regra criada com sucesso.")
                 st.session_state["regra_editando_id"] = None
                 st.session_state["regra_form_versao"] += 1
+                # dispara a sugestão de revisão retroativa (secção abaixo)
+                st.session_state["regra_revisar_id"] = regra_id_salva
+                st.session_state["regra_revisar_abrir_preview"] = False
                 st.rerun()
             except (ValueError, ErroBancoDeDados) as exc:
                 st.error(str(exc))
@@ -444,3 +449,165 @@ else:
         if colunas[7].button("Excluir", key=f"regra_excluir_{regra['id']}"):
             st.session_state["regra_excluir_id"] = regra["id"]
             st.rerun()
+
+
+# =======================================================================
+# Revisão retroativa: aplicar a regra recém criada/editada a lançamentos
+# já existentes no banco (nunca sobrescreve categorias sem ação explícita)
+# =======================================================================
+st.session_state.setdefault("regra_revisar_id", None)
+st.session_state.setdefault("regra_revisar_abrir_preview", False)
+
+regra_revisar_id = st.session_state["regra_revisar_id"]
+if regra_revisar_id is not None:
+    try:
+        compativeis_sem_categoria = categorizador.buscar_transacoes_compativeis_regra(
+            regra_revisar_id, somente_sem_categoria=True
+        )
+    except (ValueError, ErroBancoDeDados):
+        compativeis_sem_categoria = []
+        st.session_state["regra_revisar_id"] = None
+        regra_revisar_id = None
+
+if regra_revisar_id is not None and not compativeis_sem_categoria:
+    # nada para revisar (nenhum lançamento sem categoria corresponde)
+    st.session_state["regra_revisar_id"] = None
+    regra_revisar_id = None
+
+if regra_revisar_id is not None:
+    st.divider()
+    st.info(
+        f"Esta regra encontrou {len(compativeis_sem_categoria)} lançamento(s) "
+        "existente(s) sem categoria."
+    )
+
+    if not st.session_state["regra_revisar_abrir_preview"]:
+        if st.button(
+            "Revisar e aplicar aos lançamentos existentes", key="regra_revisar_abrir"
+        ):
+            st.session_state["regra_revisar_abrir_preview"] = True
+            st.rerun()
+    else:
+        incluir_categorizados = st.checkbox(
+            "Incluir lançamentos que já possuem categoria",
+            value=False,
+            key="regra_revisar_incluir_categorizados",
+        )
+
+        try:
+            compativeis_preview = categorizador.buscar_transacoes_compativeis_regra(
+                regra_revisar_id, somente_sem_categoria=not incluir_categorizados
+            )
+        except (ValueError, ErroBancoDeDados) as exc:
+            st.error(str(exc))
+            compativeis_preview = []
+
+        regra_alvo = categorizador.obter_regra(regra_revisar_id)
+        categoria_sugerida_nome = (
+            caminho_categoria(regra_alvo["categoria_id"]) if regra_alvo else "—"
+        )
+
+        if incluir_categorizados:
+            st.warning(
+                "Lançamentos já categorizados aparecem abaixo. Se selecionados e "
+                "aplicados, a categoria atual será substituída."
+            )
+
+        if not compativeis_preview:
+            st.info("Nenhum lançamento compatível encontrado com os filtros atuais.")
+        else:
+            larguras_preview = [1, 1, 3, 1, 1, 2, 2]
+            titulos_preview = [
+                "Aplicar", "Data", "Descrição", "Tipo", "Valor",
+                "Categoria atual", "Categoria sugerida",
+            ]
+            for coluna, titulo in zip(st.columns(larguras_preview), titulos_preview):
+                coluna.markdown(f"**{titulo}**")
+
+            selecionados_ids = []
+            for transacao in compativeis_preview:
+                colunas_p = st.columns(larguras_preview)
+                chave_check = f"regra_revisar_sel_{regra_revisar_id}_{transacao['id']}"
+                selecionado = colunas_p[0].checkbox(
+                    "",
+                    value=(transacao["categoria_id"] is None),
+                    key=chave_check,
+                    label_visibility="collapsed",
+                )
+                colunas_p[1].write(transacao["data_transacao"].strftime("%d/%m/%Y"))
+                colunas_p[2].write(transacao["descricao"])
+                colunas_p[3].write(badge_tipo_transacao(transacao["tipo"]))
+                colunas_p[4].write(formatar_moeda(transacao["valor"]))
+                colunas_p[5].write(caminho_categoria(transacao["categoria_id"]))
+                colunas_p[6].write(categoria_sugerida_nome)
+                if selecionado:
+                    selecionados_ids.append(transacao["id"])
+
+            col_aplicar, col_fechar = st.columns([1, 1])
+            with col_aplicar:
+                if st.button(
+                    "Aplicar categoria aos lançamentos selecionados",
+                    type="primary",
+                    key="regra_revisar_aplicar",
+                ):
+                    try:
+                        total_aplicado = categorizador.aplicar_regra_em_transacoes_existentes(
+                            regra_revisar_id,
+                            transacao_ids=selecionados_ids,
+                            somente_sem_categoria=not incluir_categorizados,
+                        )
+                        _definir_mensagem_regra(
+                            f"{total_aplicado} lançamento(s) categorizado(s) com sucesso."
+                        )
+                        st.session_state["regra_revisar_id"] = None
+                        st.session_state["regra_revisar_abrir_preview"] = False
+                        st.rerun()
+                    except (ValueError, ErroBancoDeDados) as exc:
+                        st.error(str(exc))
+            with col_fechar:
+                if st.button("Fechar", key="regra_revisar_fechar"):
+                    st.session_state["regra_revisar_id"] = None
+                    st.session_state["regra_revisar_abrir_preview"] = False
+                    st.rerun()
+
+
+# =======================================================================
+# Reaplicar todas as regras aos lançamentos sem categoria
+# =======================================================================
+st.divider()
+st.subheader("Reaplicar regras em lote")
+st.caption(
+    "Usa as regras ativas (por prioridade) para categorizar lançamentos antigos "
+    "que ainda não têm categoria. Nunca sobrescreve categorias já existentes."
+)
+
+st.session_state.setdefault("regra_previa_todas", None)
+
+if st.button("Verificar lançamentos sem categoria", key="regra_verificar_todas"):
+    try:
+        st.session_state["regra_previa_todas"] = categorizador.prever_aplicacao_todas_regras()
+    except ErroBancoDeDados as exc:
+        st.error(str(exc))
+        st.session_state["regra_previa_todas"] = None
+
+previa_todas = st.session_state["regra_previa_todas"]
+if previa_todas is not None:
+    if not previa_todas:
+        st.info("Nenhum lançamento sem categoria corresponde às regras ativas no momento.")
+    else:
+        st.write(f"**{len(previa_todas)} lançamento(s) serão categorizados.**")
+        if st.button(
+            "Aplicar todas as regras aos lançamentos sem categoria",
+            type="primary",
+            key="regra_aplicar_todas_confirmar",
+        ):
+            try:
+                ids_para_aplicar = [item["id"] for item in previa_todas]
+                total = categorizador.aplicar_todas_regras_em_transacoes_sem_categoria(
+                    ids_para_aplicar
+                )
+                st.session_state["regra_previa_todas"] = None
+                _definir_mensagem_regra(f"{total} lançamentos categorizados com sucesso.")
+                st.rerun()
+            except ErroBancoDeDados as exc:
+                st.error(str(exc))

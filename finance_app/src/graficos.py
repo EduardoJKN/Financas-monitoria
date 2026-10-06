@@ -50,7 +50,7 @@ def grafico_evolucao_mensal(dados: list[dict]) -> go.Figure:
     despesas = [float(item["total_despesas"]) for item in dados]
 
     fig = go.Figure()
-    fig.add_bar(name="Receitas", x=meses, y=receitas)
-    fig.add_bar(name="Despesas", x=meses, y=despesas)
+    fig.add_bar(name="Receitas", x=meses, y=receitas, marker_color="#2ecc71")
+    fig.add_bar(name="Despesas", x=meses, y=despesas, marker_color="#e74c3c")
     fig.update_layout(title="Evolução mensal", template="plotly_dark", barmode="group")
     return fig

@@ -257,3 +257,211 @@ def categorizar_descricao(descricao: str, tipo: str | None = None) -> int | None
         if _regra_corresponde(regra["operador"], texto_regra, descricao_normalizada):
             return regra["categoria_id"]
     return None
+
+
+# ---------------------------------------------------------------------
+# Aplicação retroativa de regras em lançamentos já existentes
+# ---------------------------------------------------------------------
+def buscar_transacoes_compativeis_regra(
+    regra_id: int, somente_sem_categoria: bool = True
+) -> list[dict]:
+    """Lista transações já existentes cuja descrição corresponde à regra.
+
+    Reaproveita exatamente a mesma comparação de _regra_corresponde usada em
+    categorizar_descricao (mesmos operadores, mesma normalização). Nunca
+    inclui transferências. Respeita a compatibilidade de tipo da categoria
+    da regra (despesa -> só despesas; receita -> só receitas; ambos ->
+    receitas e despesas). Regra inativa ou categoria inativa/inexistente
+    sempre retornam lista vazia.
+    """
+    regra = obter_regra(regra_id)
+    if regra is None:
+        raise ValueError(f"Regra {regra_id} não encontrada.")
+    if not regra["ativa"]:
+        return []
+
+    try:
+        with obter_engine().connect() as conn:
+            categoria = (
+                conn.execute(
+                    text("SELECT tipo, ativa FROM categorias WHERE id = :id"),
+                    {"id": regra["categoria_id"]},
+                )
+                .mappings()
+                .first()
+            )
+
+            if categoria is None or not categoria["ativa"]:
+                return []
+
+            tipos_aceitos = (
+                ["receita", "despesa"] if categoria["tipo"] == "ambos" else [categoria["tipo"]]
+            )
+            placeholders = ", ".join(f":tipo{i}" for i in range(len(tipos_aceitos)))
+            parametros: dict[str, object] = {
+                f"tipo{i}": tipo for i, tipo in enumerate(tipos_aceitos)
+            }
+
+            condicoes = [f"tipo IN ({placeholders})"]
+            if somente_sem_categoria:
+                condicoes.append("categoria_id IS NULL")
+            clausula_where = " AND ".join(condicoes)
+
+            linhas = (
+                conn.execute(
+                    text(
+                        f"SELECT * FROM transacoes WHERE {clausula_where} "
+                        "ORDER BY data_transacao DESC, id DESC"
+                    ),
+                    parametros,
+                )
+                .mappings()
+                .all()
+            )
+    except SQLAlchemyError as exc:
+        raise ErroBancoDeDados("Falha ao buscar lançamentos compatíveis com a regra.") from exc
+
+    texto_regra = normalizar_texto(regra["texto_busca"])
+    return [
+        dict(linha)
+        for linha in linhas
+        if _regra_corresponde(regra["operador"], texto_regra, normalizar_texto(linha["descricao"]))
+    ]
+
+
+def aplicar_regra_em_transacoes_existentes(
+    regra_id: int,
+    transacao_ids: list[int] | None = None,
+    somente_sem_categoria: bool = True,
+) -> int:
+    """Aplica a categoria da regra às transações informadas.
+
+    Atualiza SOMENTE a coluna categoria_id — nenhum outro campo da transação
+    é tocado. Operação atômica: todas as atualizações acontecem em uma única
+    transação de banco (tudo ou nada).
+
+    Por segurança, o conjunto de transações elegíveis é sempre recalculado
+    via buscar_transacoes_compativeis_regra com o mesmo somente_sem_categoria
+    recebido aqui — mesmo que `transacao_ids` inclua uma transação já
+    categorizada, ela só será de fato atualizada se somente_sem_categoria for
+    False (ou seja, a sobrescrita exige escolha explícita da chamada, nunca
+    acontece por padrão).
+    """
+    if regra_id is None:
+        raise ValueError("regra_id é obrigatório.")
+
+    compativeis = buscar_transacoes_compativeis_regra(
+        regra_id, somente_sem_categoria=somente_sem_categoria
+    )
+    if transacao_ids is None:
+        alvo_ids = [t["id"] for t in compativeis]
+    else:
+        ids_compativeis = {t["id"] for t in compativeis}
+        alvo_ids = [tid for tid in transacao_ids if tid in ids_compativeis]
+
+    if not alvo_ids:
+        return 0
+
+    regra = obter_regra(regra_id)
+
+    try:
+        with obter_engine().begin() as conn:
+            for tid in alvo_ids:
+                conn.execute(
+                    text(
+                        "UPDATE transacoes SET categoria_id = :categoria_id, "
+                        "atualizado_em = now() WHERE id = :id"
+                    ),
+                    {"categoria_id": regra["categoria_id"], "id": tid},
+                )
+    except SQLAlchemyError as exc:
+        raise ErroBancoDeDados(
+            "Falha ao aplicar a regra aos lançamentos existentes."
+        ) from exc
+
+    return len(alvo_ids)
+
+
+def prever_aplicacao_todas_regras() -> list[dict]:
+    """Para cada transação sem categoria (receita/despesa, nunca
+    transferência), calcula a categoria sugerida usando categorizar_descricao
+    — a mesma função usada em importações e novos lançamentos. Não altera o
+    banco; apenas retorna o que SERIA feito.
+    """
+    try:
+        with obter_engine().connect() as conn:
+            candidatas = (
+                conn.execute(
+                    text(
+                        "SELECT id, data_transacao, descricao, tipo, valor FROM transacoes "
+                        "WHERE categoria_id IS NULL AND tipo IN ('receita', 'despesa') "
+                        "ORDER BY data_transacao DESC, id DESC"
+                    )
+                )
+                .mappings()
+                .all()
+            )
+    except SQLAlchemyError as exc:
+        raise ErroBancoDeDados("Falha ao buscar lançamentos sem categoria.") from exc
+
+    resultado = []
+    for linha in candidatas:
+        categoria_sugerida_id = categorizar_descricao(linha["descricao"], linha["tipo"])
+        if categoria_sugerida_id is not None:
+            item = dict(linha)
+            item["categoria_sugerida_id"] = categoria_sugerida_id
+            resultado.append(item)
+    return resultado
+
+
+def aplicar_todas_regras_em_transacoes_sem_categoria(transacao_ids: list[int]) -> int:
+    """Aplica, de forma atômica, a categoria sugerida por categorizar_descricao
+    às transações informadas (pensado para receber os ids retornados por
+    prever_aplicacao_todas_regras).
+
+    Nunca sobrescreve uma transação que já tenha categoria: cada linha é
+    reconferida (categoria_id IS NULL) dentro da própria transação de banco
+    antes de ser atualizada, e a categoria é recalculada na hora (protege
+    contra regras terem mudado entre a prévia e a confirmação). Atualiza
+    somente categoria_id.
+    """
+    if not transacao_ids:
+        return 0
+
+    try:
+        with obter_engine().begin() as conn:
+            total = 0
+            for tid in transacao_ids:
+                atual = (
+                    conn.execute(
+                        text(
+                            "SELECT descricao, tipo, categoria_id FROM transacoes WHERE id = :id"
+                        ),
+                        {"id": tid},
+                    )
+                    .mappings()
+                    .first()
+                )
+                if atual is None or atual["categoria_id"] is not None:
+                    continue  # nunca sobrescreve uma categoria já existente
+                if atual["tipo"] not in ("receita", "despesa"):
+                    continue  # nunca categoriza transferência
+
+                categoria_id = categorizar_descricao(atual["descricao"], atual["tipo"])
+                if categoria_id is None:
+                    continue
+
+                conn.execute(
+                    text(
+                        "UPDATE transacoes SET categoria_id = :categoria_id, "
+                        "atualizado_em = now() WHERE id = :id"
+                    ),
+                    {"categoria_id": categoria_id, "id": tid},
+                )
+                total += 1
+    except SQLAlchemyError as exc:
+        raise ErroBancoDeDados(
+            "Falha ao aplicar as regras aos lançamentos existentes."
+        ) from exc
+
+    return total

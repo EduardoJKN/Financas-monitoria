@@ -2,7 +2,12 @@ from decimal import Decimal
 
 import pytest
 
-from src.formatacao import formatar_moeda, texto_para_decimal
+from src.formatacao import (
+    badge_pagamento_fatura,
+    badge_tipo_transacao,
+    formatar_moeda,
+    texto_para_decimal,
+)
 
 
 def test_formatar_moeda_positivo():
@@ -52,3 +57,41 @@ def test_texto_para_decimal_nunca_usa_float():
     resultado = texto_para_decimal("0,30")
     assert resultado == Decimal("0.30")
     assert resultado != Decimal(0.1) + Decimal(0.2)
+
+
+# ---------------------------------------------------------------------
+# Identificação visual (badges) por tipo de lançamento
+# ---------------------------------------------------------------------
+def test_badge_receita_verde():
+    assert badge_tipo_transacao("receita") == "🟢 Receita"
+
+
+def test_badge_despesa_vermelha():
+    assert badge_tipo_transacao("despesa") == "🔴 Despesa"
+
+
+def test_badge_transferencia_azul():
+    assert badge_tipo_transacao("transferencia") == "🔵 Transferência"
+
+
+def test_badge_pagamento_fatura_roxo():
+    assert badge_pagamento_fatura() == "🟣 Pagamento de fatura"
+
+
+def test_badge_tipo_desconhecido_tem_fallback_sem_erro():
+    resultado = badge_tipo_transacao("tipo_que_nao_existe")
+    assert isinstance(resultado, str)
+    assert resultado  # não é vazio
+    assert "Tipo_que_nao_existe" in resultado or "tipo_que_nao_existe" in resultado.lower()
+
+
+def test_badge_tipo_none_tem_fallback_sem_erro():
+    resultado = badge_tipo_transacao(None)
+    assert isinstance(resultado, str)
+    assert resultado  # não levanta erro, não é vazio
+
+
+def test_badge_tipo_string_vazia_tem_fallback_sem_erro():
+    resultado = badge_tipo_transacao("")
+    assert isinstance(resultado, str)
+    assert resultado
