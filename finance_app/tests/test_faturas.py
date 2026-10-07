@@ -4,7 +4,7 @@ from decimal import Decimal
 import pytest
 
 from src import cartoes, faturas, transacoes
-from src.banco_de_dados import obter_engine
+from src.banco_de_dados import conexao_usuario
 
 
 # ---------------------------------------------------------------------
@@ -64,12 +64,12 @@ def test_calcular_datas_fatura_virada_de_ano_no_vencimento():
 def test_obter_ou_criar_fatura_e_idempotente(cartao_a):
     cartao = cartoes.obter_cartao(cartao_a)
     try:
-        with obter_engine().begin() as conn:
+        with conexao_usuario() as conn:
             fatura1 = faturas.obter_ou_criar_fatura(conn, cartao, date(2026, 3, 10))
             fatura2 = faturas.obter_ou_criar_fatura(conn, cartao, date(2026, 3, 15))
         assert fatura1["id"] == fatura2["id"]  # mesma fatura, não cria duplicada
     finally:
-        with obter_engine().begin() as conn:
+        with conexao_usuario() as conn:
             from sqlalchemy import text
 
             conn.execute(text("DELETE FROM faturas_cartao WHERE cartao_id = :id"), {"id": cartao_a})
@@ -105,8 +105,62 @@ def test_pagamento_integral_e_parcial(conta_a, cartao_a, categoria_despesa):
             faturas.registrar_pagamento_fatura(fatura_id, conta_a, Decimal("1"), date(2026, 3, 28))
     finally:
         transacoes.excluir_transacao(tid)
-        with obter_engine().begin() as conn:
+        with conexao_usuario() as conn:
             from sqlalchemy import text
 
             conn.execute(text("DELETE FROM pagamentos_fatura WHERE conta_id = :id"), {"id": conta_a})
+            conn.execute(text("DELETE FROM faturas_cartao WHERE cartao_id = :id"), {"id": cartao_a})
+
+
+# ---------------------------------------------------------------------
+# fatura_compativel_para_pagamento — base da decisão explícita da
+# importação quando "possível pagamento de fatura" é escolhido (Parte 12
+# da rodada de correções: nunca cair silenciosamente em despesa comum)
+# ---------------------------------------------------------------------
+def test_fatura_compativel_retorna_none_sem_nenhuma_fatura(cartao_a):
+    assert faturas.fatura_compativel_para_pagamento(cartao_a, date(2026, 3, 26)) is None
+
+
+def test_fatura_compativel_retorna_none_quando_ja_totalmente_paga(conta_a, cartao_a, categoria_despesa):
+    tid = transacoes.criar_transacao(
+        tipo="despesa",
+        descricao="Compra Fatura Pytest",
+        valor=Decimal("300"),
+        data_transacao=date(2026, 3, 10),
+        cartao_id=cartao_a,
+        categoria_id=categoria_despesa,
+    )
+    try:
+        t = transacoes.obter_transacao(tid)
+        faturas.registrar_pagamento_fatura(t["fatura_id"], conta_a, Decimal("300"), date(2026, 3, 27))
+        # fatura já paga integralmente: não deve ser sugerida de novo
+        assert faturas.fatura_compativel_para_pagamento(cartao_a, date(2026, 3, 28)) is None
+    finally:
+        transacoes.excluir_transacao(tid)
+        with conexao_usuario() as conn:
+            from sqlalchemy import text
+
+            conn.execute(text("DELETE FROM pagamentos_fatura WHERE conta_id = :id"), {"id": conta_a})
+            conn.execute(text("DELETE FROM faturas_cartao WHERE cartao_id = :id"), {"id": cartao_a})
+
+
+def test_fatura_compativel_encontra_fatura_fechada_com_saldo_devedor(conta_a, cartao_a, categoria_despesa):
+    tid = transacoes.criar_transacao(
+        tipo="despesa",
+        descricao="Compra Fatura Pytest",
+        valor=Decimal("300"),
+        data_transacao=date(2026, 3, 10),
+        cartao_id=cartao_a,
+        categoria_id=categoria_despesa,
+    )
+    try:
+        t = transacoes.obter_transacao(tid)
+        encontrada = faturas.fatura_compativel_para_pagamento(cartao_a, date(2026, 3, 27))
+        assert encontrada is not None
+        assert encontrada["id"] == t["fatura_id"]
+    finally:
+        transacoes.excluir_transacao(tid)
+        with conexao_usuario() as conn:
+            from sqlalchemy import text
+
             conn.execute(text("DELETE FROM faturas_cartao WHERE cartao_id = :id"), {"id": cartao_a})

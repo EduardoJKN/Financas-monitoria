@@ -92,3 +92,21 @@ def test_ler_transacoes_ofx_vazio_levanta_erro():
 def test_ler_transacoes_ofx_invalido_levanta_erro_amigavel():
     with pytest.raises(ValueError):
         ofx.ler_transacoes_ofx(b"isso nao e um arquivo ofx valido")
+
+
+# ---------------------------------------------------------------------
+# Saldo informado pelo banco (LEDGERBAL/BALAMT/DTASOF) — Parte 9
+# ---------------------------------------------------------------------
+def test_ler_saldo_ofx_extrai_ledgerbal():
+    saldo = ofx.ler_saldo_ofx(_OFX_AMOSTRA)
+    assert saldo is not None
+    assert saldo["saldo_banco"] == Decimal("5000.00")
+    assert saldo["data_saldo"] == date(2026, 3, 31)
+
+
+def test_ler_saldo_ofx_arquivo_invalido_retorna_none():
+    assert ofx.ler_saldo_ofx(b"nao e ofx") is None
+
+
+def test_ler_saldo_ofx_vazio_retorna_none():
+    assert ofx.ler_saldo_ofx(b"") is None

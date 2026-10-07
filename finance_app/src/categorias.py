@@ -2,7 +2,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import SQLAlchemyError
 
-from src.banco_de_dados import ErroBancoDeDados, obter_engine
+from src.banco_de_dados import ErroBancoDeDados, conexao_usuario
 
 TIPOS_CATEGORIA = {"receita", "despesa", "ambos"}
 
@@ -56,7 +56,7 @@ def criar_categoria(
     _validar_tipo(tipo)
 
     try:
-        with obter_engine().begin() as conn:
+        with conexao_usuario() as conn:
             if categoria_pai_id is not None:
                 _validar_pai(conn, categoria_pai_id, tipo, id_atual=None)
 
@@ -77,7 +77,7 @@ def criar_categoria(
 
 def obter_categoria(id: int) -> dict | None:
     try:
-        with obter_engine().connect() as conn:
+        with conexao_usuario() as conn:
             linha = conn.execute(
                 text("SELECT * FROM categorias WHERE id = :id"), {"id": id}
             ).mappings().first()
@@ -105,7 +105,7 @@ def listar_categorias(
     consulta = text(f"SELECT * FROM categorias{clausula_where} ORDER BY nome")
 
     try:
-        with obter_engine().connect() as conn:
+        with conexao_usuario() as conn:
             linhas = conn.execute(consulta, parametros).mappings().all()
             return [dict(linha) for linha in linhas]
     except SQLAlchemyError as exc:
@@ -125,7 +125,7 @@ def atualizar_categoria(
         _validar_tipo(tipo)
 
     try:
-        with obter_engine().begin() as conn:
+        with conexao_usuario() as conn:
             atual = conn.execute(
                 text("SELECT tipo, categoria_pai_id FROM categorias WHERE id = :id"),
                 {"id": id},
@@ -171,7 +171,7 @@ def atualizar_categoria(
 
 def excluir_categoria(id: int) -> None:
     try:
-        with obter_engine().begin() as conn:
+        with conexao_usuario() as conn:
             tem_dependencias = conn.execute(
                 text(
                     """

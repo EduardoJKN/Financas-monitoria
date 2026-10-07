@@ -6,10 +6,19 @@ de cada linha em receita/despesa/erro/revisão.
 """
 
 import csv
+import unicodedata
 from datetime import date, datetime
 
 from src.categorizador import normalizar_texto
 from src.formatacao import texto_para_decimal
+
+
+def _remover_acentos(texto: str) -> str:
+    """Remove acentos/diacríticos (ex.: 'cartão' -> 'cartao') para a
+    comparação de termos de transferência/pagamento de fatura funcionar
+    independente de o extrato do banco acentuar ou não a descrição."""
+    decomposto = unicodedata.normalize("NFKD", texto)
+    return "".join(c for c in decomposto if not unicodedata.combining(c))
 
 FORMATOS_DATA = ["%d/%m/%Y", "%d/%m/%y", "%Y-%m-%d", "%d-%m-%Y"]
 ENCODINGS_CANDIDATOS = ["utf-8-sig", "utf-8", "cp1252", "latin1"]
@@ -117,9 +126,78 @@ def processar_linha(
         "tipo": tipo,
         "status": status,
         "mensagem": mensagem,
+        "possivel_transferencia": eh_possivel_transferencia(descricao),
+        "possivel_pagamento_fatura": eh_possivel_pagamento_fatura(descricao),
     }
 
 
 def chave_duplicidade(conta_id: int, data: date, tipo: str, valor, descricao: str) -> tuple:
     """Chave usada para detectar duplicidade: conta + data + tipo + valor + descrição normalizada."""
     return (conta_id, data, tipo, valor, normalizar_texto(descricao))
+
+
+# ---------------------------------------------------------------------
+# Detecção de possíveis transferências e pagamentos de fatura importados
+# ---------------------------------------------------------------------
+# Descrições de extrato/OFX com estes termos PODEM ser transferência entre
+# contas próprias — mas também podem ser um pagamento ou receita comuns
+# (ex.: "Pix recebido" de um cliente é receita, não transferência). Por
+# isso isto nunca classifica automaticamente: só marca "possível
+# transferência" na prévia, e quem decide é sempre o usuário (ver Parte 11).
+_TERMOS_POSSIVEL_TRANSFERENCIA = (
+    "pix recebido",
+    "pix enviado",
+    "transferencia recebida",
+    "transferencia enviada",
+    "ted recebida",
+    "ted enviada",
+    "doc recebido",
+    "doc enviado",
+    "transferencia entre contas",
+)
+
+_TERMOS_POSSIVEL_PAGAMENTO_FATURA = (
+    "pagamento de fatura",
+    "pagamento cartao",
+    "pagamento do cartao",
+    "fatura cartao",
+    "pagto fatura",
+    "pagto cartao",
+)
+
+
+def eh_possivel_transferencia(descricao: str) -> bool:
+    """True quando a descrição contém um termo tipicamente usado por bancos
+    para transferências (Pix, TED, DOC...). Não decide o tipo final: apenas
+    sinaliza a linha na prévia para o usuário escolher."""
+    descricao_normalizada = _remover_acentos(normalizar_texto(descricao))
+    return any(termo in descricao_normalizada for termo in _TERMOS_POSSIVEL_TRANSFERENCIA)
+
+
+def eh_possivel_pagamento_fatura(descricao: str) -> bool:
+    """True quando a descrição contém um termo tipicamente usado por bancos
+    para pagamento de fatura de cartão de crédito."""
+    descricao_normalizada = _remover_acentos(normalizar_texto(descricao))
+    return any(termo in descricao_normalizada for termo in _TERMOS_POSSIVEL_PAGAMENTO_FATURA)
+
+
+def resolver_contas_transferencia(
+    tipo_original: str, conta_extrato_id: int, outra_conta_id: int
+) -> tuple[int, int]:
+    """Decide (conta_id, conta_destino_id) de uma linha importada
+    reclassificada como transferência, respeitando a direção do
+    lançamento original no extrato — nunca assume que a conta do extrato
+    é sempre a origem:
+
+    - despesa/saída: o dinheiro SAI da conta do extrato -> ela é a origem
+      (conta_id) e a outra conta é o destino.
+    - receita/entrada: o dinheiro ENTRA na conta do extrato -> a outra
+      conta é a origem (conta_id) e a conta do extrato é o destino.
+
+    tipo_original é sempre 'receita' ou 'despesa' (o tipo inferido pelo
+    sinal do valor antes da reclassificação; 'transferencia' nunca é um
+    tipo de origem aqui).
+    """
+    if tipo_original == "receita":
+        return outra_conta_id, conta_extrato_id
+    return conta_extrato_id, outra_conta_id

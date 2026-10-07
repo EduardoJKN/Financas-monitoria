@@ -12,7 +12,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import SQLAlchemyError
 
-from src.banco_de_dados import ErroBancoDeDados, obter_engine
+from src.banco_de_dados import ErroBancoDeDados, conexao_usuario
 from src.datas import avancar_anos, avancar_meses
 
 PERIODICIDADES = {"mensal", "semanal", "anual"}
@@ -119,7 +119,7 @@ def criar_recorrencia(
     _validar_datas(data_inicio, data_fim)
 
     try:
-        with obter_engine().begin() as conn:
+        with conexao_usuario() as conn:
             _validar_conta_ativa(conn, conta_id)
             if categoria_id is not None:
                 _validar_categoria_ativa(conn, categoria_id, tipo)
@@ -157,7 +157,7 @@ def criar_recorrencia(
 
 def obter_recorrencia(id: int) -> dict | None:
     try:
-        with obter_engine().connect() as conn:
+        with conexao_usuario() as conn:
             linha = (
                 conn.execute(text("SELECT * FROM recorrencias WHERE id = :id"), {"id": id})
                 .mappings()
@@ -176,7 +176,7 @@ def listar_recorrencias(incluir_inativas: bool = False) -> list[dict]:
             "SELECT * FROM recorrencias WHERE ativa = true ORDER BY descricao"
         )
     try:
-        with obter_engine().connect() as conn:
+        with conexao_usuario() as conn:
             linhas = conn.execute(consulta).mappings().all()
             return [dict(linha) for linha in linhas]
     except SQLAlchemyError as exc:
@@ -205,7 +205,7 @@ def atualizar_recorrencia(
         _validar_periodicidade(periodicidade)
 
     try:
-        with obter_engine().begin() as conn:
+        with conexao_usuario() as conn:
             atual = (
                 conn.execute(text("SELECT * FROM recorrencias WHERE id = :id"), {"id": id})
                 .mappings()
@@ -262,7 +262,7 @@ def excluir_recorrencia(id: int) -> None:
     desativa em vez de excluir, preservando o histórico dos lançamentos já
     gerados."""
     try:
-        with obter_engine().begin() as conn:
+        with conexao_usuario() as conn:
             tem_transacoes = conn.execute(
                 text("SELECT EXISTS (SELECT 1 FROM transacoes WHERE recorrencia_id = :id)"),
                 {"id": id},
@@ -305,7 +305,7 @@ def gerar_lancamentos_pendentes(hoje: date | None = None) -> dict:
     referencia = hoje if hoje is not None else date.today()
 
     try:
-        with obter_engine().begin() as conn:
+        with conexao_usuario() as conn:
             recorrencias_ativas = (
                 conn.execute(
                     text(

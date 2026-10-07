@@ -1,9 +1,12 @@
+from datetime import date
 from decimal import Decimal
 
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
-from src.banco_de_dados import ErroBancoDeDados, obter_engine
+from src.banco_de_dados import ErroBancoDeDados, conexao_usuario
+
+_NAO_INFORMADO = object()
 
 TIPOS_CONTA = {
     "conta_corrente",
@@ -32,19 +35,22 @@ def criar_conta(
     tipo: str,
     instituicao: str | None = None,
     saldo_inicial: Decimal = Decimal("0"),
+    data_saldo_inicial: date | None = None,
 ) -> int:
     _validar_nome(nome)
     _validar_tipo(tipo)
     if not isinstance(saldo_inicial, Decimal):
         raise ValueError("saldo_inicial deve ser do tipo Decimal.")
+    if data_saldo_inicial is not None and not isinstance(data_saldo_inicial, date):
+        raise ValueError("data_saldo_inicial deve ser um objeto date.")
 
     try:
-        with obter_engine().begin() as conn:
+        with conexao_usuario() as conn:
             resultado = conn.execute(
                 text(
                     """
-                    INSERT INTO contas (nome, tipo, instituicao, saldo_inicial)
-                    VALUES (:nome, :tipo, :instituicao, :saldo_inicial)
+                    INSERT INTO contas (nome, tipo, instituicao, saldo_inicial, data_saldo_inicial)
+                    VALUES (:nome, :tipo, :instituicao, :saldo_inicial, :data_saldo_inicial)
                     RETURNING id
                     """
                 ),
@@ -53,6 +59,7 @@ def criar_conta(
                     "tipo": tipo,
                     "instituicao": instituicao,
                     "saldo_inicial": saldo_inicial,
+                    "data_saldo_inicial": data_saldo_inicial,
                 },
             )
             return resultado.scalar_one()
@@ -62,7 +69,7 @@ def criar_conta(
 
 def obter_conta(id: int) -> dict | None:
     try:
-        with obter_engine().connect() as conn:
+        with conexao_usuario() as conn:
             linha = conn.execute(
                 text("SELECT * FROM contas WHERE id = :id"), {"id": id}
             ).mappings().first()
@@ -78,7 +85,7 @@ def listar_contas(incluir_inativas: bool = False) -> list[dict]:
         consulta = text("SELECT * FROM contas WHERE ativa = true ORDER BY nome")
 
     try:
-        with obter_engine().connect() as conn:
+        with conexao_usuario() as conn:
             linhas = conn.execute(consulta).mappings().all()
             return [dict(linha) for linha in linhas]
     except SQLAlchemyError as exc:
@@ -91,6 +98,7 @@ def atualizar_conta(
     tipo: str | None = None,
     instituicao: str | None = None,
     saldo_inicial: Decimal | None = None,
+    data_saldo_inicial=_NAO_INFORMADO,
     ativa: bool | None = None,
 ) -> None:
     campos: dict[str, object] = {}
@@ -107,6 +115,10 @@ def atualizar_conta(
         if not isinstance(saldo_inicial, Decimal):
             raise ValueError("saldo_inicial deve ser do tipo Decimal.")
         campos["saldo_inicial"] = saldo_inicial
+    if data_saldo_inicial is not _NAO_INFORMADO:
+        if data_saldo_inicial is not None and not isinstance(data_saldo_inicial, date):
+            raise ValueError("data_saldo_inicial deve ser um objeto date.")
+        campos["data_saldo_inicial"] = data_saldo_inicial
     if ativa is not None:
         campos["ativa"] = ativa
 
@@ -117,7 +129,7 @@ def atualizar_conta(
     campos["id"] = id
 
     try:
-        with obter_engine().begin() as conn:
+        with conexao_usuario() as conn:
             resultado = conn.execute(
                 text(
                     f"UPDATE contas SET {atribuicoes}, atualizado_em = now() "
@@ -133,7 +145,7 @@ def atualizar_conta(
 
 def excluir_conta(id: int) -> None:
     try:
-        with obter_engine().begin() as conn:
+        with conexao_usuario() as conn:
             tem_transacoes = conn.execute(
                 text(
                     """

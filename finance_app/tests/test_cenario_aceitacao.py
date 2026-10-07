@@ -23,7 +23,7 @@ from src import (
     resumo_financeiro as resumo,
     transacoes,
 )
-from src.banco_de_dados import obter_engine
+from src.banco_de_dados import conexao_usuario
 
 
 def test_cenario_financeiro_completo():
@@ -221,7 +221,7 @@ NEWFILEUID:NONE
                 transacoes.excluir_transacao(tid)
             except Exception:
                 pass
-        with obter_engine().begin() as conn:
+        with conexao_usuario() as conn:
             from sqlalchemy import text
 
             for cid in criados["cartoes"]:

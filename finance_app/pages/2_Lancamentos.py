@@ -5,7 +5,12 @@ import streamlit as st
 
 from src import cartoes, categorias, contas, recorrencias, transacoes
 from src.banco_de_dados import ErroBancoDeDados
-from src.formatacao import badge_tipo_transacao, formatar_moeda, texto_para_decimal
+from src.formatacao import (
+    badge_tipo_transacao,
+    container_linha_colorida,
+    formatar_moeda,
+    texto_para_decimal,
+)
 
 st.title("Lançamentos")
 
@@ -490,29 +495,30 @@ else:
             coluna.markdown(f"**{titulo}**")
 
     for lancamento in lancamentos:
-        colunas = st.columns(larguras)
-        colunas[0].write(lancamento["data_transacao"].strftime("%d/%m/%Y"))
-        colunas[1].write(TIPOS_LABEL[lancamento["tipo"]])
-        descricao_exibida = lancamento["descricao"]
-        if lancamento.get("numero_parcela") and lancamento.get("total_parcelas"):
-            descricao_exibida = (
-                f"{descricao_exibida} — {lancamento['numero_parcela']}/{lancamento['total_parcelas']}"
-            )
-        colunas[2].write(descricao_exibida)
-        colunas[3].write(caminho_categoria(lancamento["categoria_id"]))
-        if lancamento.get("cartao_id"):
-            colunas[4].write(f"💳 {nome_cartao(lancamento['cartao_id'])}")
-        else:
-            colunas[4].write(nome_conta(lancamento["conta_id"]))
-        colunas[5].write(nome_conta(lancamento["conta_destino_id"]))
-        colunas[6].write(_formatar_valor(lancamento["valor"]))
-        if colunas[7].button("Editar", key=f"editar_{lancamento['id']}"):
-            st.session_state["lanc_editando_id"] = lancamento["id"]
-            st.session_state["lanc_form_versao"] += 1
-            st.rerun()
-        if colunas[8].button("Excluir", key=f"excluir_{lancamento['id']}"):
-            st.session_state["lanc_excluir_id"] = lancamento["id"]
-            st.rerun()
+        with container_linha_colorida(st, f"lanc_linha_{lancamento['id']}", lancamento["tipo"]):
+            colunas = st.columns(larguras)
+            colunas[0].write(lancamento["data_transacao"].strftime("%d/%m/%Y"))
+            colunas[1].write(TIPOS_LABEL[lancamento["tipo"]])
+            descricao_exibida = lancamento["descricao"]
+            if lancamento.get("numero_parcela") and lancamento.get("total_parcelas"):
+                descricao_exibida = (
+                    f"{descricao_exibida} — {lancamento['numero_parcela']}/{lancamento['total_parcelas']}"
+                )
+            colunas[2].write(descricao_exibida)
+            colunas[3].write(caminho_categoria(lancamento["categoria_id"]))
+            if lancamento.get("cartao_id"):
+                colunas[4].write(f"💳 {nome_cartao(lancamento['cartao_id'])}")
+            else:
+                colunas[4].write(nome_conta(lancamento["conta_id"]))
+            colunas[5].write(nome_conta(lancamento["conta_destino_id"]))
+            colunas[6].write(_formatar_valor(lancamento["valor"]))
+            if colunas[7].button("Editar", key=f"editar_{lancamento['id']}"):
+                st.session_state["lanc_editando_id"] = lancamento["id"]
+                st.session_state["lanc_form_versao"] += 1
+                st.rerun()
+            if colunas[8].button("Excluir", key=f"excluir_{lancamento['id']}"):
+                st.session_state["lanc_excluir_id"] = lancamento["id"]
+                st.rerun()
 
 
 # =======================================================================

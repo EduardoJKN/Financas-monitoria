@@ -1,5 +1,7 @@
 from datetime import date
 
+import pytest
+
 from src import importador
 
 
@@ -100,3 +102,61 @@ def test_chave_duplicidade_normaliza_descricao():
     chave1 = importador.chave_duplicidade(1, date(2026, 10, 1), "despesa", 45.90, "  IFOOD *delivery  ")
     chave2 = importador.chave_duplicidade(1, date(2026, 10, 1), "despesa", 45.90, "ifood *DELIVERY")
     assert chave1 == chave2
+
+
+# ---------------------------------------------------------------------
+# Detecção de possível transferência / pagamento de fatura — Partes 11/12
+# ---------------------------------------------------------------------
+@pytest.mark.parametrize(
+    "descricao",
+    ["Pix recebido", "Pix enviado", "Transferência recebida", "TED enviada", "DOC recebido"],
+)
+def test_eh_possivel_transferencia_detecta_termos_comuns(descricao):
+    assert importador.eh_possivel_transferencia(descricao) is True
+
+
+def test_eh_possivel_transferencia_nao_marca_descricao_comum():
+    assert importador.eh_possivel_transferencia("Supermercado Extra") is False
+
+
+@pytest.mark.parametrize(
+    "descricao",
+    ["Pagamento de fatura", "Pagamento cartão", "Fatura cartão", "pagto fatura cartao nubank"],
+)
+def test_eh_possivel_pagamento_fatura_detecta_termos_comuns(descricao):
+    assert importador.eh_possivel_pagamento_fatura(descricao) is True
+
+
+def test_eh_possivel_pagamento_fatura_nao_marca_descricao_comum():
+    assert importador.eh_possivel_pagamento_fatura("Restaurante Sabor Caseiro") is False
+
+
+def test_processar_linha_marca_flags_de_possivel_classificacao():
+    linha = importador.processar_linha("01/10/2026", "Pix recebido de Joao", "150,00")
+    assert linha["possivel_transferencia"] is True
+    assert linha["possivel_pagamento_fatura"] is False
+
+
+# ---------------------------------------------------------------------
+# Direção da transferência reclassificada na importação (correção):
+# a conta do extrato não é sempre a origem — depende do sinal original.
+# ---------------------------------------------------------------------
+def test_resolver_contas_transferencia_despesa_extrato_e_origem():
+    # "Pix enviado" (despesa/saída): dinheiro sai da conta do extrato (10)
+    # para a outra conta (20).
+    conta_id, conta_destino_id = importador.resolver_contas_transferencia(
+        "despesa", conta_extrato_id=10, outra_conta_id=20
+    )
+    assert conta_id == 10
+    assert conta_destino_id == 20
+
+
+def test_resolver_contas_transferencia_receita_extrato_e_destino():
+    # "Pix recebido" (receita/entrada): dinheiro vem da outra conta (20)
+    # para a conta do extrato (10) — a conta do extrato é o DESTINO, não a
+    # origem.
+    conta_id, conta_destino_id = importador.resolver_contas_transferencia(
+        "receita", conta_extrato_id=10, outra_conta_id=20
+    )
+    assert conta_id == 20
+    assert conta_destino_id == 10

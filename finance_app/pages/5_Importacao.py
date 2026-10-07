@@ -4,11 +4,18 @@ import io
 import pandas as pd
 import streamlit as st
 
+from src import cartoes as cartoes_modulo
 from src import categorias as categorias_modulo
-from src import categorizador, contas, importador, ofx as ofx_modulo, transacoes
+from src import categorizador, contas, faturas as faturas_modulo, importador, ofx as ofx_modulo, transacoes
+from src import resumo_financeiro as resumo_modulo
 from src.banco_de_dados import ErroBancoDeDados
 from src.categorizador import normalizar_texto
-from src.formatacao import badge_tipo_transacao, formatar_moeda
+from src.formatacao import (
+    badge_pagamento_fatura,
+    badge_tipo_transacao,
+    container_linha_colorida,
+    formatar_moeda,
+)
 
 st.title("Importação")
 st.caption(
@@ -93,6 +100,33 @@ if eh_ofx:
         "Tipo (receita/despesa) definido automaticamente pelo sinal do valor, "
         "como em um CSV sem coluna de tipo."
     )
+
+    # --- comparação de saldo informado pelo banco (Parte 9) ---
+    saldo_ofx = ofx_modulo.ler_saldo_ofx(conteudo_bytes)
+    if saldo_ofx is not None:
+        try:
+            saldo_app = resumo_modulo.calcular_saldo_conta(
+                conta_id_importacao, ate_data=saldo_ofx["data_saldo"]
+            )
+        except ErroBancoDeDados:
+            saldo_app = None
+        if saldo_app is not None:
+            diferenca = saldo_ofx["saldo_banco"] - saldo_app
+            st.markdown("**Conciliação de saldo**")
+            col_s1, col_s2, col_s3 = st.columns(3)
+            col_s1.metric("Saldo do banco", formatar_moeda(saldo_ofx["saldo_banco"]))
+            col_s2.metric("Saldo do aplicativo", formatar_moeda(saldo_app))
+            col_s3.metric("Diferença", formatar_moeda(diferenca))
+            if saldo_ofx["data_saldo"]:
+                st.caption(f"Data do saldo informado pelo banco: {saldo_ofx['data_saldo'].strftime('%d/%m/%Y')}")
+            if diferenca == 0:
+                st.success("✅ Saldo conciliado.")
+            else:
+                st.warning(
+                    "⚠️ Existe diferença de saldo. Use a ação \"Conciliar conta\" na "
+                    "página Contas se quiser ajustar a referência — a importação não "
+                    "faz esse ajuste automaticamente."
+                )
 
 else:
     st.subheader("Leitura do arquivo CSV")
@@ -244,6 +278,15 @@ except ErroBancoDeDados as exc:
 
 mapa_categorias_imp = {c["id"]: c for c in categorias_todas}
 
+try:
+    cartoes_ativos = cartoes_modulo.listar_cartoes(incluir_inativos=False)
+except ErroBancoDeDados as exc:
+    st.error(str(exc))
+    cartoes_ativos = []
+mapa_cartoes_imp = {c["id"]: c for c in cartoes_ativos}
+
+contas_destino_possiveis = [c for c in contas_ativas if c["id"] != conta_id_importacao]
+
 
 def caminho_categoria_imp(categoria_id: int | None) -> str:
     if categoria_id is None:
@@ -325,56 +368,134 @@ TIPO_LABEL_IMPORT = {
 }
 
 for linha in linhas_processadas:
-    colunas = st.columns(larguras_prev)
     chave_base = f"{hash_arquivo}_{linha['indice']}"
-    pode_selecionar = linha["status"] in ("ok", "duplicada")
+    linha["classificacao"] = "normal"
+    linha["outra_conta_id"] = None
+    linha["cartao_vinculado_id"] = None
 
-    if pode_selecionar:
-        chave_sel = f"imp_sel_{chave_base}"
-        selecionado = colunas[0].checkbox(
-            "", value=(linha["status"] == "ok"), key=chave_sel, label_visibility="collapsed"
-        )
-    else:
-        colunas[0].write("—")
-        selecionado = False
-    linha["selecionado"] = selecionado
+    with container_linha_colorida(st, f"imp_linha_{chave_base}", linha["tipo"]):
+        colunas = st.columns(larguras_prev)
+        pode_selecionar = linha["status"] in ("ok", "duplicada")
 
-    colunas[1].write(
-        linha["data"].strftime("%d/%m/%Y") if linha["data"] else (linha["data_bruta"] or "—")
-    )
-    colunas[2].write(linha["descricao"] or "—")
-    colunas[3].write(TIPO_LABEL_IMPORT.get(linha["tipo"], "—"))
-    colunas[4].write(
-        formatar_moeda(linha["valor"]) if linha["valor"] is not None else (linha["valor_bruto"] or "—")
-    )
+        if pode_selecionar:
+            chave_sel = f"imp_sel_{chave_base}"
+            selecionado = colunas[0].checkbox(
+                "", value=(linha["status"] == "ok"), key=chave_sel, label_visibility="collapsed"
+            )
+        else:
+            colunas[0].write("—")
+            selecionado = False
+        linha["selecionado"] = selecionado
 
-    if pode_selecionar:
-        ids_compat = sorted(
-            (
-                c["id"]
-                for c in categorias_todas
-                if c["ativa"] and (c["tipo"] == "ambos" or c["tipo"] == linha["tipo"])
-            ),
-            key=caminho_categoria_imp,
+        colunas[1].write(
+            linha["data"].strftime("%d/%m/%Y") if linha["data"] else (linha["data_bruta"] or "—")
         )
-        opcoes_cat = [None] + ids_compat
-        categoria_default = (
-            linha["categoria_sugerida_id"] if linha["categoria_sugerida_id"] in opcoes_cat else None
+        colunas[2].write(linha["descricao"] or "—")
+        colunas[3].write(TIPO_LABEL_IMPORT.get(linha["tipo"], "—"))
+        colunas[4].write(
+            formatar_moeda(linha["valor"]) if linha["valor"] is not None else (linha["valor_bruto"] or "—")
         )
-        categoria_escolhida = colunas[5].selectbox(
-            "",
-            opcoes_cat,
-            index=opcoes_cat.index(categoria_default),
-            format_func=caminho_categoria_imp,
-            key=f"imp_cat_{chave_base}",
-            label_visibility="collapsed",
-        )
-    else:
-        colunas[5].write("—")
-        categoria_escolhida = None
-    linha["categoria_id"] = categoria_escolhida
 
-    colunas[6].write(f"{STATUS_LABEL.get(linha['status'], '')} {linha['mensagem']}")
+        if pode_selecionar:
+            ids_compat = sorted(
+                (
+                    c["id"]
+                    for c in categorias_todas
+                    if c["ativa"] and (c["tipo"] == "ambos" or c["tipo"] == linha["tipo"])
+                ),
+                key=caminho_categoria_imp,
+            )
+            opcoes_cat = [None] + ids_compat
+            categoria_default = (
+                linha["categoria_sugerida_id"] if linha["categoria_sugerida_id"] in opcoes_cat else None
+            )
+            categoria_escolhida = colunas[5].selectbox(
+                "",
+                opcoes_cat,
+                index=opcoes_cat.index(categoria_default),
+                format_func=caminho_categoria_imp,
+                key=f"imp_cat_{chave_base}",
+                label_visibility="collapsed",
+            )
+        else:
+            colunas[5].write("—")
+            categoria_escolhida = None
+        linha["categoria_id"] = categoria_escolhida
+
+        colunas[6].write(f"{STATUS_LABEL.get(linha['status'], '')} {linha['mensagem']}")
+
+        # --- Parte 11+12: possível transferência / pagamento de fatura ---
+        oferece_transferencia = linha["possivel_transferencia"] and bool(contas_destino_possiveis)
+        oferece_pagamento_fatura = linha["possivel_pagamento_fatura"] and bool(cartoes_ativos)
+
+        if pode_selecionar and (oferece_transferencia or oferece_pagamento_fatura):
+            opcoes_classificacao = ["Classificar como " + TIPO_LABEL_IMPORT.get(linha["tipo"], "lançamento comum")]
+            if oferece_transferencia:
+                opcoes_classificacao.append("🔵 Possível transferência — marcar como Transferência")
+            if oferece_pagamento_fatura:
+                opcoes_classificacao.append("🟣 Possível pagamento de fatura — vincular a um cartão")
+
+            escolha_classificacao = st.radio(
+                "Esta linha pode ser outra coisa:",
+                opcoes_classificacao,
+                horizontal=True,
+                key=f"imp_classif_{chave_base}",
+                label_visibility="visible" if len(opcoes_classificacao) > 1 else "collapsed",
+            )
+
+            if escolha_classificacao.startswith("🔵"):
+                linha["classificacao"] = "transferencia"
+                # O rótulo reflete a direção real do dinheiro: numa linha
+                # originalmente de despesa, a conta do extrato é a origem
+                # (dinheiro sai para a outra conta); numa de receita, é o
+                # destino (dinheiro vem da outra conta). Ver
+                # importador.resolver_contas_transferencia.
+                rotulo_outra_conta = (
+                    "Transferir para a conta"
+                    if linha["tipo"] == "despesa"
+                    else "Recebido da conta"
+                )
+                linha["outra_conta_id"] = st.selectbox(
+                    rotulo_outra_conta,
+                    [c["id"] for c in contas_destino_possiveis],
+                    format_func=lambda cid: mapa_contas_imp[cid]["nome"],
+                    key=f"imp_destino_{chave_base}",
+                )
+            elif escolha_classificacao.startswith("🟣"):
+                linha["classificacao"] = "pagamento_fatura"
+                linha["cartao_vinculado_id"] = st.selectbox(
+                    "Cartão cuja fatura foi paga",
+                    [c["id"] for c in cartoes_ativos],
+                    format_func=lambda cid: mapa_cartoes_imp[cid]["nome"],
+                    key=f"imp_cartao_{chave_base}",
+                )
+
+                fatura_resolvida = faturas_modulo.fatura_compativel_para_pagamento(
+                    linha["cartao_vinculado_id"], linha["data"]
+                )
+                if fatura_resolvida is None:
+                    st.warning(
+                        "Nenhuma fatura compatível (aberta/fechada com saldo devedor) "
+                        f"encontrada para {mapa_cartoes_imp[linha['cartao_vinculado_id']]['nome']} "
+                        "nessa data."
+                    )
+                    decisao_sem_fatura = st.radio(
+                        "Como proceder com este lançamento?",
+                        [
+                            "Escolher outro cartão acima",
+                            "Manter como despesa comum",
+                            "Não importar esta linha",
+                        ],
+                        key=f"imp_sem_fatura_{chave_base}",
+                    )
+                    if decisao_sem_fatura == "Manter como despesa comum":
+                        linha["classificacao"] = "normal"
+                    elif decisao_sem_fatura == "Não importar esta linha":
+                        linha["classificacao"] = "nao_importar"
+                    # "Escolher outro cartão acima" -> mantém classificacao
+                    # "pagamento_fatura"; o confirm loop recalcula a fatura e,
+                    # se ainda não houver uma compatível, não importa a linha
+                    # silenciosamente como despesa (ver abaixo).
 
 # =======================================================================
 # Confirmação e importação
@@ -401,19 +522,63 @@ if st.button("Importar lançamentos selecionados", type="primary", key="imp_conf
     for linha in linhas_processadas:
         if linha["status"] not in ("ok", "duplicada"):
             continue
+        if linha["classificacao"] == "nao_importar":
+            ignoradas += 1
+            continue
         if not linha["selecionado"]:
             ignoradas += 1
             continue
         try:
-            transacoes.criar_transacao(
-                tipo=linha["tipo"],
-                descricao=linha["descricao"],
-                valor=linha["valor"],
-                data_transacao=linha["data"],
-                conta_id=conta_id_importacao,
-                categoria_id=linha["categoria_id"],
-                origem="importacao",
-            )
+            if linha["classificacao"] == "transferencia":
+                conta_origem_id, conta_destino_final_id = importador.resolver_contas_transferencia(
+                    linha["tipo"], conta_id_importacao, linha["outra_conta_id"]
+                )
+                transacoes.criar_transacao(
+                    tipo="transferencia",
+                    descricao=linha["descricao"],
+                    valor=linha["valor"],
+                    data_transacao=linha["data"],
+                    conta_id=conta_origem_id,
+                    conta_destino_id=conta_destino_final_id,
+                    origem="importacao",
+                )
+            elif linha["classificacao"] == "pagamento_fatura":
+                fatura_compativel = faturas_modulo.fatura_compativel_para_pagamento(
+                    linha["cartao_vinculado_id"], linha["data"]
+                )
+                if fatura_compativel is None:
+                    # Nunca converte silenciosamente em despesa comum: sem
+                    # fatura compatível e sem decisão explícita (despesa
+                    # comum / não importar) tomada na prévia, a linha não é
+                    # importada — evita tanto "perder" o lançamento quanto
+                    # dupla contagem por engano.
+                    com_erro += 1
+                    erros_insercao.append(
+                        (
+                            linha["indice"],
+                            linha["descricao"],
+                            "Nenhuma fatura compatível encontrada para o cartão escolhido; "
+                            "linha não importada. Volte à prévia e escolha \"manter como "
+                            "despesa comum\" ou \"não importar\".",
+                        )
+                    )
+                    continue
+                # Pagamento de fatura: reduz o saldo da conta e registra o
+                # pagamento — nunca também como despesa comum (evita dupla
+                # contagem, já que a compra já foi contada na fatura).
+                faturas_modulo.registrar_pagamento_fatura(
+                    fatura_compativel["id"], conta_id_importacao, linha["valor"], linha["data"]
+                )
+            else:
+                transacoes.criar_transacao(
+                    tipo=linha["tipo"],
+                    descricao=linha["descricao"],
+                    valor=linha["valor"],
+                    data_transacao=linha["data"],
+                    conta_id=conta_id_importacao,
+                    categoria_id=linha["categoria_id"],
+                    origem="importacao",
+                )
             importadas += 1
         except (ValueError, ErroBancoDeDados) as exc:
             com_erro += 1

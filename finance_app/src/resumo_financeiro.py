@@ -6,11 +6,20 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from src import cartoes as cartoes_modulo
 from src import categorias as categorias_modulo
+from src import contas as contas_modulo
 from src import faturas as faturas_modulo
-from src.banco_de_dados import ErroBancoDeDados, obter_engine
+from src.banco_de_dados import ErroBancoDeDados, conexao_usuario
+from src.datas import avancar_meses
 
 TIPOS_RESUMO_CATEGORIA = {"receita", "despesa"}
-PERIODOS_VALIDOS = {"este_mes", "mes_passado", "ultimos_30_dias", "este_ano"}
+PERIODOS_VALIDOS = {
+    "este_mes",
+    "mes_passado",
+    "ultimos_30_dias",
+    "ultimos_3_meses",
+    "ultimos_6_meses",
+    "este_ano",
+}
 
 # Saldo de cada conta = saldo_inicial + receitas - despesas pagas pela conta
 #                        + transferências recebidas - transferências enviadas
@@ -20,6 +29,15 @@ PERIODOS_VALIDOS = {"este_mes", "mes_passado", "ultimos_30_dias", "este_ano"}
 # contagem. Contas inativas não são filtradas aqui de propósito: elas
 # continuam participando de cálculos históricos, pois podem ter transações
 # associadas.
+#
+# data_saldo_inicial (quando preenchida) é a data de referência de
+# saldo_inicial: "saldo_inicial = saldo da conta ao final de
+# data_saldo_inicial". Movimentações NESSA data ou antes já estão
+# implicitamente contempladas em saldo_inicial, então só movimentações
+# estritamente posteriores entram na soma — senão duplicariam o efeito.
+# Contas sem data_saldo_inicial (NULL) mantêm o comportamento anterior: toda
+# movimentação histórica entra na soma (compatibilidade com contas antigas
+# ainda não conciliadas).
 _SQL_SALDOS = """
     WITH movimentos AS (
         SELECT
@@ -47,15 +65,18 @@ _SQL_SALDOS = """
         FROM pagamentos_fatura
     ),
     agregado AS (
-        SELECT conta_id, SUM(efeito) AS total
-        FROM movimentos
-        WHERE :ate_data IS NULL OR data_transacao <= :ate_data
-        GROUP BY conta_id
+        SELECT m.conta_id, SUM(m.efeito) AS total
+        FROM movimentos m
+        JOIN contas c ON c.id = m.conta_id
+        WHERE (c.data_saldo_inicial IS NULL OR m.data_transacao > c.data_saldo_inicial)
+          AND (:ate_data IS NULL OR m.data_transacao <= :ate_data)
+        GROUP BY m.conta_id
     )
     SELECT
         c.id AS conta_id,
         c.nome,
         c.ativa,
+        c.data_saldo_inicial,
         c.saldo_inicial + COALESCE(a.total, 0) AS saldo
     FROM contas c
     LEFT JOIN agregado a ON a.conta_id = c.id
@@ -109,6 +130,10 @@ def calcular_intervalo_periodo(
         return referencia.replace(day=1), referencia
     if periodo == "ultimos_30_dias":
         return referencia - timedelta(days=29), referencia
+    if periodo == "ultimos_3_meses":
+        return avancar_meses(referencia, -3) + timedelta(days=1), referencia
+    if periodo == "ultimos_6_meses":
+        return avancar_meses(referencia, -6) + timedelta(days=1), referencia
     if periodo == "este_ano":
         return referencia.replace(month=1, day=1), referencia
 
@@ -121,7 +146,7 @@ def calcular_intervalo_periodo(
 def calcular_saldo_conta(conta_id: int, ate_data: date | None = None) -> Decimal:
     _validar_data_opcional(ate_data, "ate_data")
     try:
-        with obter_engine().connect() as conn:
+        with conexao_usuario() as conn:
             linha = conn.execute(
                 text(_SQL_SALDOS), {"ate_data": ate_data, "conta_id": conta_id}
             ).mappings().first()
@@ -136,7 +161,7 @@ def calcular_saldo_conta(conta_id: int, ate_data: date | None = None) -> Decimal
 def calcular_saldos_contas(ate_data: date | None = None) -> list[dict]:
     _validar_data_opcional(ate_data, "ate_data")
     try:
-        with obter_engine().connect() as conn:
+        with conexao_usuario() as conn:
             linhas = conn.execute(
                 text(_SQL_SALDOS), {"ate_data": ate_data, "conta_id": None}
             ).mappings().all()
@@ -192,7 +217,7 @@ def calcular_resumo_periodo(
     params = {"conta_id": conta_id, "data_inicial": data_inicial, "data_final": data_final}
 
     try:
-        with obter_engine().connect() as conn:
+        with conexao_usuario() as conn:
             linha = conn.execute(sql, params).mappings().one()
     except SQLAlchemyError as exc:
         raise ErroBancoDeDados("Falha ao calcular resumo do período.") from exc
@@ -243,7 +268,7 @@ def resumir_por_categoria(
     }
 
     try:
-        with obter_engine().connect() as conn:
+        with conexao_usuario() as conn:
             linhas = conn.execute(sql, params).mappings().all()
     except SQLAlchemyError as exc:
         raise ErroBancoDeDados("Falha ao calcular resumo por categoria.") from exc
@@ -286,7 +311,7 @@ def resumir_por_mes(
     params = {"conta_id": conta_id, "data_inicial": data_inicial, "data_final": data_final}
 
     try:
-        with obter_engine().connect() as conn:
+        with conexao_usuario() as conn:
             linhas = conn.execute(sql, params).mappings().all()
     except SQLAlchemyError as exc:
         raise ErroBancoDeDados("Falha ao calcular resumo mensal.") from exc
@@ -347,4 +372,63 @@ def calcular_indicadores_cartoes(hoje: date | None = None) -> dict:
         "total_faturas_abertas": total_faturas_abertas,
         "total_faturas_a_vencer": total_faturas_a_vencer,
         "cartoes": info_cartoes,
+    }
+
+
+# ---------------------------------------------------------------------
+# Conciliação de saldo
+# ---------------------------------------------------------------------
+def precisa_conciliacao(conta_id: int) -> bool:
+    """True quando a conta ainda não tem data_saldo_inicial definida — sinal
+    de que o saldo da conta ainda não foi conciliado com o banco."""
+    conta = contas_modulo.obter_conta(conta_id)
+    if conta is None:
+        raise ValueError(f"Conta {conta_id} não encontrada.")
+    return conta.get("data_saldo_inicial") is None
+
+
+def pre_visualizar_conciliacao(
+    conta_id: int, data_referencia: date, saldo_informado: Decimal
+) -> dict:
+    """Mostra o impacto de uma conciliação ANTES de aplicá-la: saldo
+    calculado hoje pela conta, saldo informado (ex.: pelo extrato/OFX),
+    diferença entre os dois e a data de referência proposta. Não altera
+    nada no banco."""
+    if not isinstance(saldo_informado, Decimal):
+        raise ValueError("saldo_informado deve ser do tipo Decimal.")
+    _validar_data_opcional(data_referencia, "data_referencia")
+    if data_referencia is None:
+        raise ValueError("data_referencia é obrigatória.")
+
+    saldo_calculado = calcular_saldo_conta(conta_id)
+    return {
+        "conta_id": conta_id,
+        "data_referencia": data_referencia,
+        "saldo_calculado_atual": saldo_calculado,
+        "saldo_informado": saldo_informado,
+        "diferenca": saldo_informado - saldo_calculado,
+    }
+
+
+def conciliar_conta(conta_id: int, data_referencia: date, saldo_informado: Decimal) -> dict:
+    """Aplica a conciliação: a partir de agora, saldo_inicial = saldo
+    informado e data_saldo_inicial = data_referencia (o saldo bateu com o
+    banco nesse dia). Lançamentos até essa data continuam existindo no
+    histórico — só deixam de ser somados de novo no cálculo do saldo atual,
+    evitando dupla contagem. NUNCA cria lançamentos falsos para "forçar" o
+    saldo a bater; apenas desloca o ponto de partida do cálculo. A alteração
+    fica registrada em contas.atualizado_em (auditável)."""
+    if not isinstance(saldo_informado, Decimal):
+        raise ValueError("saldo_informado deve ser do tipo Decimal.")
+    if not isinstance(data_referencia, date):
+        raise ValueError("data_referencia deve ser um objeto date.")
+
+    contas_modulo.atualizar_conta(
+        conta_id, saldo_inicial=saldo_informado, data_saldo_inicial=data_referencia
+    )
+    return {
+        "conta_id": conta_id,
+        "data_saldo_inicial": data_referencia,
+        "saldo_inicial": saldo_informado,
+        "saldo_atual": calcular_saldo_conta(conta_id),
     }

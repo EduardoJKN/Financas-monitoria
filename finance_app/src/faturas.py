@@ -26,7 +26,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import SQLAlchemyError
 
-from src.banco_de_dados import ErroBancoDeDados, obter_engine
+from src.banco_de_dados import ErroBancoDeDados, conexao_usuario
 from src.datas import dia_valido_no_mes
 
 STATUS_FATURA = {"aberta", "fechada", "paga", "parcial"}
@@ -135,7 +135,7 @@ def obter_ou_criar_fatura(conn: Connection, cartao: dict, data_compra: date) -> 
 # ---------------------------------------------------------------------
 def obter_fatura(id: int) -> dict | None:
     try:
-        with obter_engine().connect() as conn:
+        with conexao_usuario() as conn:
             linha = (
                 conn.execute(text("SELECT * FROM faturas_cartao WHERE id = :id"), {"id": id})
                 .mappings()
@@ -157,7 +157,7 @@ def listar_faturas(cartao_id: int | None = None) -> list[dict]:
         f"SELECT * FROM faturas_cartao{clausula_where} ORDER BY mes_referencia DESC"
     )
     try:
-        with obter_engine().connect() as conn:
+        with conexao_usuario() as conn:
             linhas = conn.execute(consulta, parametros).mappings().all()
             return [dict(linha) for linha in linhas]
     except SQLAlchemyError as exc:
@@ -166,7 +166,7 @@ def listar_faturas(cartao_id: int | None = None) -> list[dict]:
 
 def calcular_total_fatura(fatura_id: int) -> Decimal:
     try:
-        with obter_engine().connect() as conn:
+        with conexao_usuario() as conn:
             total = conn.execute(
                 text(
                     "SELECT COALESCE(SUM(valor), 0) FROM transacoes "
@@ -181,7 +181,7 @@ def calcular_total_fatura(fatura_id: int) -> Decimal:
 
 def calcular_total_pago(fatura_id: int) -> Decimal:
     try:
-        with obter_engine().connect() as conn:
+        with conexao_usuario() as conn:
             total = conn.execute(
                 text(
                     "SELECT COALESCE(SUM(valor), 0) FROM pagamentos_fatura "
@@ -198,9 +198,22 @@ def calcular_saldo_devedor_fatura(fatura_id: int) -> Decimal:
     return calcular_total_fatura(fatura_id) - calcular_total_pago(fatura_id)
 
 
+def fatura_compativel_para_pagamento(cartao_id: int, data_pagamento: date) -> dict | None:
+    """Encontra a fatura mais provável para um pagamento importado: a mais
+    recente já fechada até data_pagamento e que ainda tenha saldo devedor.
+    Usada pela importação (Parte 12) para sugerir o vínculo de um
+    "possível pagamento de fatura" — nunca cria nada, apenas sugere."""
+    todas = listar_faturas(cartao_id=cartao_id)
+    candidatas = [f for f in todas if f["data_fechamento"] <= data_pagamento]
+    for fatura in candidatas:  # já vem ordenado por mes_referencia DESC
+        if calcular_saldo_devedor_fatura(fatura["id"]) > 0:
+            return fatura
+    return None
+
+
 def listar_pagamentos(fatura_id: int) -> list[dict]:
     try:
-        with obter_engine().connect() as conn:
+        with conexao_usuario() as conn:
             linhas = (
                 conn.execute(
                     text(
@@ -221,7 +234,7 @@ def calcular_limite_utilizado(cartao_id: int) -> Decimal:
     """Soma de todas as compras no cartão ainda não pagas (saldo devedor de
     todas as faturas do cartão)."""
     try:
-        with obter_engine().connect() as conn:
+        with conexao_usuario() as conn:
             total_compras = conn.execute(
                 text(
                     "SELECT COALESCE(SUM(valor), 0) FROM transacoes "
@@ -259,7 +272,7 @@ def registrar_pagamento_fatura(
         raise ValueError("data_pagamento deve ser um objeto date.")
 
     try:
-        with obter_engine().begin() as conn:
+        with conexao_usuario() as conn:
             fatura = (
                 conn.execute(
                     text("SELECT * FROM faturas_cartao WHERE id = :id"), {"id": fatura_id}

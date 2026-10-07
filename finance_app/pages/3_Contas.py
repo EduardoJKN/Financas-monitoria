@@ -1,6 +1,9 @@
+from datetime import date
+from decimal import Decimal
+
 import streamlit as st
 
-from src import contas
+from src import contas, resumo_financeiro as resumo
 from src.banco_de_dados import ErroBancoDeDados
 from src.formatacao import formatar_moeda, texto_para_decimal
 
@@ -77,6 +80,24 @@ with col_d:
         key=f"saldo_inicial_{sufixo}",
     )
 
+tem_data_saldo_inicial = st.checkbox(
+    "Esse saldo inicial tem uma data de referência (recomendado)?",
+    value=bool(dados_edicao and dados_edicao.get("data_saldo_inicial")),
+    key=f"tem_data_saldo_inicial_{sufixo}",
+    help=(
+        "A data em que o saldo acima era o saldo real da conta no banco. "
+        "Movimentações até essa data não são somadas de novo no cálculo do "
+        "saldo atual, evitando dupla contagem."
+    ),
+)
+data_saldo_inicial = None
+if tem_data_saldo_inicial:
+    data_saldo_inicial = st.date_input(
+        "Saldo inicial válido em",
+        value=(dados_edicao.get("data_saldo_inicial") or date.today()) if dados_edicao else date.today(),
+        key=f"data_saldo_inicial_{sufixo}",
+    )
+
 ativa = st.checkbox(
     "Ativa", value=dados_edicao["ativa"] if dados_edicao else True, key=f"ativa_{sufixo}"
 )
@@ -94,6 +115,7 @@ with col_salvar:
                     tipo=tipo,
                     instituicao=instituicao or None,
                     saldo_inicial=saldo_inicial_decimal,
+                    data_saldo_inicial=data_saldo_inicial,
                     ativa=ativa,
                 )
                 _definir_mensagem("Conta atualizada com sucesso.")
@@ -103,6 +125,7 @@ with col_salvar:
                     tipo=tipo,
                     instituicao=instituicao or None,
                     saldo_inicial=saldo_inicial_decimal,
+                    data_saldo_inicial=data_saldo_inicial,
                 )
                 _definir_mensagem("Conta criada com sucesso.")
             st.session_state["conta_editando_id"] = None
@@ -165,6 +188,71 @@ if st.session_state["conta_excluir_id"] is not None:
 
 
 # ---------------------------------------------------------------------
+# Conciliação de saldo (Parte 10)
+# ---------------------------------------------------------------------
+st.session_state.setdefault("conta_conciliar_id", None)
+
+
+@st.dialog("Conciliar conta")
+def _conciliar_conta(conta_id: int) -> None:
+    conta = contas.obter_conta(conta_id)
+    if conta is None:
+        st.warning("Esta conta já não existe mais.")
+        if st.button("Fechar", key="conciliar_fechar"):
+            st.session_state["conta_conciliar_id"] = None
+            st.rerun()
+        return
+
+    st.write(f"**Conta:** {conta['nome']}")
+    data_referencia = st.date_input(
+        "Data em que o saldo abaixo é válido", value=date.today(), key="conciliar_data"
+    )
+    saldo_banco_texto = st.text_input(
+        "Saldo informado pelo banco/extrato nessa data (R$)",
+        key="conciliar_saldo_banco",
+        placeholder="Ex.: 1234,56",
+    )
+
+    if saldo_banco_texto.strip():
+        try:
+            saldo_banco_decimal = texto_para_decimal(saldo_banco_texto)
+            previa = resumo.pre_visualizar_conciliacao(conta_id, data_referencia, saldo_banco_decimal)
+        except (ValueError, ErroBancoDeDados) as exc:
+            st.error(str(exc))
+            previa = None
+
+        if previa is not None:
+            col_p1, col_p2, col_p3 = st.columns(3)
+            col_p1.metric("Saldo calculado hoje", formatar_moeda(previa["saldo_calculado_atual"]))
+            col_p2.metric("Saldo informado", formatar_moeda(previa["saldo_informado"]))
+            col_p3.metric("Diferença", formatar_moeda(previa["diferenca"]))
+            st.caption(
+                f"Depois de conciliar: saldo_inicial passa a ser "
+                f"{formatar_moeda(saldo_banco_decimal)} com data de referência "
+                f"{data_referencia.strftime('%d/%m/%Y')}. Lançamentos até essa data "
+                "continuam no histórico, só não são somados de novo no cálculo do saldo."
+            )
+            if st.button("Confirmar conciliação", type="primary", key="conciliar_confirmar"):
+                try:
+                    resultado = resumo.conciliar_conta(conta_id, data_referencia, saldo_banco_decimal)
+                    st.session_state["conta_conciliar_id"] = None
+                    _definir_mensagem(
+                        f"Conta conciliada. Novo saldo: {formatar_moeda(resultado['saldo_atual'])}."
+                    )
+                    st.rerun()
+                except (ValueError, ErroBancoDeDados) as exc:
+                    st.error(str(exc))
+
+    if st.button("Cancelar", key="conciliar_cancelar"):
+        st.session_state["conta_conciliar_id"] = None
+        st.rerun()
+
+
+if st.session_state["conta_conciliar_id"] is not None:
+    _conciliar_conta(st.session_state["conta_conciliar_id"])
+
+
+# ---------------------------------------------------------------------
 # Listagem
 # ---------------------------------------------------------------------
 st.divider()
@@ -183,25 +271,35 @@ except ErroBancoDeDados as exc:
 if not lista_contas:
     st.info("Nenhuma conta cadastrada ainda. Use o formulário acima para criar a primeira.")
 else:
-    larguras = [2, 2, 2, 2, 1, 1, 1, 1]
-    titulos = ["Nome", "Tipo", "Instituição", "Saldo inicial", "Ativa", "", "", ""]
+    larguras = [2, 2, 2, 2, 2, 1, 1, 1, 1]
+    titulos = ["Nome", "Tipo", "Instituição", "Saldo atual", "Conciliação", "", "", "", ""]
     for coluna, titulo in zip(st.columns(larguras), titulos):
         if titulo:
             coluna.markdown(f"**{titulo}**")
 
     for conta in lista_contas:
         colunas = st.columns(larguras)
-        colunas[0].write(conta["nome"])
+        colunas[0].write(conta["nome"] if conta["ativa"] else f"{conta['nome']} (inativa)")
         colunas[1].write(TIPOS_LABEL.get(conta["tipo"], conta["tipo"]))
         colunas[2].write(conta["instituicao"] or "—")
-        colunas[3].write(formatar_moeda(conta["saldo_inicial"]))
-        colunas[4].write("✅ Ativa" if conta["ativa"] else "⛔ Inativa")
+        try:
+            saldo_atual = resumo.calcular_saldo_conta(conta["id"])
+            colunas[3].write(formatar_moeda(saldo_atual))
+        except ErroBancoDeDados:
+            colunas[3].write("—")
+        if conta.get("data_saldo_inicial"):
+            colunas[4].write(f"✅ {conta['data_saldo_inicial'].strftime('%d/%m/%Y')}")
+        else:
+            colunas[4].write("⚠️ Sem referência")
         if colunas[5].button("Editar", key=f"conta_editar_{conta['id']}"):
             st.session_state["conta_editando_id"] = conta["id"]
             st.session_state["conta_form_versao"] += 1
             st.rerun()
+        if colunas[6].button("Conciliar", key=f"conta_conciliar_{conta['id']}"):
+            st.session_state["conta_conciliar_id"] = conta["id"]
+            st.rerun()
         rotulo_toggle = "Desativar" if conta["ativa"] else "Ativar"
-        if colunas[6].button(rotulo_toggle, key=f"conta_toggle_{conta['id']}"):
+        if colunas[7].button(rotulo_toggle, key=f"conta_toggle_{conta['id']}"):
             try:
                 contas.atualizar_conta(conta["id"], ativa=not conta["ativa"])
                 _definir_mensagem(
@@ -212,6 +310,6 @@ else:
                 st.rerun()
             except (ValueError, ErroBancoDeDados) as exc:
                 st.error(str(exc))
-        if colunas[7].button("Excluir", key=f"conta_excluir_{conta['id']}"):
+        if colunas[8].button("Excluir", key=f"conta_excluir_{conta['id']}"):
             st.session_state["conta_excluir_id"] = conta["id"]
             st.rerun()

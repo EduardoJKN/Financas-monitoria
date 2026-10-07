@@ -5,6 +5,7 @@ import pytest
 from src.formatacao import (
     badge_pagamento_fatura,
     badge_tipo_transacao,
+    cor_fundo_lancamento,
     formatar_moeda,
     texto_para_decimal,
 )
@@ -95,3 +96,27 @@ def test_badge_tipo_string_vazia_tem_fallback_sem_erro():
     resultado = badge_tipo_transacao("")
     assert isinstance(resultado, str)
     assert resultado
+
+
+# ---------------------------------------------------------------------
+# Cor de fundo da linha inteira, por tipo de lançamento
+# ---------------------------------------------------------------------
+def test_cor_fundo_receita_e_verde():
+    assert "46, 204, 113" in cor_fundo_lancamento("receita")
+
+
+def test_cor_fundo_despesa_e_vermelha():
+    assert "231, 76, 60" in cor_fundo_lancamento("despesa")
+
+
+def test_cor_fundo_transferencia_e_azul():
+    assert "52, 152, 219" in cor_fundo_lancamento("transferencia")
+
+
+def test_cor_fundo_pagamento_fatura_e_roxa():
+    assert "155, 89, 182" in cor_fundo_lancamento("pagamento_fatura")
+
+
+def test_cor_fundo_tipo_desconhecido_retorna_none():
+    assert cor_fundo_lancamento("tipo_inexistente") is None
+    assert cor_fundo_lancamento(None) is None

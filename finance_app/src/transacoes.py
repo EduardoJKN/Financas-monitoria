@@ -7,7 +7,7 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.exc import SQLAlchemyError
 
 from src import faturas
-from src.banco_de_dados import ErroBancoDeDados, obter_engine
+from src.banco_de_dados import ErroBancoDeDados, conexao_usuario
 from src.datas import avancar_meses
 
 TIPOS_TRANSACAO = {"receita", "despesa", "transferencia"}
@@ -219,7 +219,7 @@ def criar_transacao(
     _validar_parcelamento(numero_parcela, total_parcelas, grupo_parcelamento)
 
     try:
-        with obter_engine().begin() as conn:
+        with conexao_usuario() as conn:
             cartao = _validar_forma_pagamento_e_categoria(
                 conn, tipo, conta_id, cartao_id, conta_destino_id, categoria_id
             )
@@ -338,7 +338,7 @@ def criar_transacao_parcelada(
     grupo_parcelamento = uuid.uuid4()
 
     try:
-        with obter_engine().begin() as conn:
+        with conexao_usuario() as conn:
             cartao = _validar_forma_pagamento_e_categoria(
                 conn, tipo, conta_id, cartao_id, None, categoria_id
             )
@@ -391,7 +391,7 @@ def criar_transacao_parcelada(
 
 def obter_transacao(id: int) -> dict | None:
     try:
-        with obter_engine().connect() as conn:
+        with conexao_usuario() as conn:
             linha = conn.execute(
                 text("SELECT * FROM transacoes WHERE id = :id"), {"id": id}
             ).mappings().first()
@@ -457,7 +457,7 @@ def listar_transacoes(
     )
 
     try:
-        with obter_engine().connect() as conn:
+        with conexao_usuario() as conn:
             linhas = conn.execute(consulta, parametros).mappings().all()
             return [dict(linha) for linha in linhas]
     except SQLAlchemyError as exc:
@@ -487,7 +487,7 @@ def atualizar_transacao(
     cartao_id + data_transacao.
     """
     try:
-        with obter_engine().begin() as conn:
+        with conexao_usuario() as conn:
             atual = conn.execute(
                 text("SELECT * FROM transacoes WHERE id = :id"), {"id": id}
             ).mappings().first()
@@ -574,7 +574,7 @@ def atualizar_transacao(
 
 def excluir_transacao(id: int) -> None:
     try:
-        with obter_engine().begin() as conn:
+        with conexao_usuario() as conn:
             resultado = conn.execute(
                 text("DELETE FROM transacoes WHERE id = :id"), {"id": id}
             )

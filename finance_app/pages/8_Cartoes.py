@@ -4,7 +4,12 @@ import streamlit as st
 
 from src import cartoes, contas, faturas
 from src.banco_de_dados import ErroBancoDeDados
-from src.formatacao import badge_pagamento_fatura, formatar_moeda, texto_para_decimal
+from src.formatacao import (
+    badge_pagamento_fatura,
+    container_linha_colorida,
+    formatar_moeda,
+    texto_para_decimal,
+)
 
 st.title("Cartões")
 
@@ -339,17 +344,19 @@ else:
                 total_atual = faturas.calcular_total_fatura(fatura_atual["id"])
                 status_atual = faturas.status_exibicao_fatura(fatura_atual, hoje=hoje)
                 saldo_devedor_atual = faturas.calcular_saldo_devedor_fatura(fatura_atual["id"])
-                col_f1, col_f2, col_f3, col_f4 = st.columns(4)
-                col_f1.write(f"Mês: {fatura_atual['mes_referencia'].strftime('%m/%Y')}")
-                col_f2.write(f"Total: {formatar_moeda(total_atual)}")
-                col_f3.write(f"Vencimento: {fatura_atual['data_vencimento'].strftime('%d/%m/%Y')}")
-                col_f4.write(f"Status: {STATUS_LABEL.get(status_atual, status_atual)}")
-                if saldo_devedor_atual > 0:
-                    if st.button(
-                        "Registrar pagamento", key=f"cartao_pagar_atual_{cartao['id']}"
-                    ):
-                        st.session_state["cartao_pagar_fatura_id"] = fatura_atual["id"]
-                        st.rerun()
+                tipo_cor_atual = "pagamento_fatura" if status_atual in ("paga", "parcial") else None
+                with container_linha_colorida(st, f"fatura_atual_{fatura_atual['id']}", tipo_cor_atual):
+                    col_f1, col_f2, col_f3, col_f4 = st.columns(4)
+                    col_f1.write(f"Mês: {fatura_atual['mes_referencia'].strftime('%m/%Y')}")
+                    col_f2.write(f"Total: {formatar_moeda(total_atual)}")
+                    col_f3.write(f"Vencimento: {fatura_atual['data_vencimento'].strftime('%d/%m/%Y')}")
+                    col_f4.write(f"Status: {STATUS_LABEL.get(status_atual, status_atual)}")
+                    if saldo_devedor_atual > 0:
+                        if st.button(
+                            "Registrar pagamento", key=f"cartao_pagar_atual_{cartao['id']}"
+                        ):
+                            st.session_state["cartao_pagar_fatura_id"] = fatura_atual["id"]
+                            st.rerun()
 
             if faturas_anteriores:
                 with st.expander(f"Ver faturas anteriores ({len(faturas_anteriores)})"):
@@ -359,17 +366,23 @@ else:
                         saldo_devedor_antiga = faturas.calcular_saldo_devedor_fatura(
                             fatura_antiga["id"]
                         )
-                        col_a1, col_a2, col_a3, col_a4, col_a5 = st.columns(5)
-                        col_a1.write(fatura_antiga["mes_referencia"].strftime("%m/%Y"))
-                        col_a2.write(formatar_moeda(total_antiga))
-                        col_a3.write(fatura_antiga["data_vencimento"].strftime("%d/%m/%Y"))
-                        col_a4.write(STATUS_LABEL.get(status_antiga, status_antiga))
-                        if saldo_devedor_antiga > 0:
-                            if col_a5.button(
-                                "Pagar", key=f"cartao_pagar_antiga_{fatura_antiga['id']}"
-                            ):
-                                st.session_state["cartao_pagar_fatura_id"] = fatura_antiga["id"]
-                                st.rerun()
+                        tipo_cor_antiga = (
+                            "pagamento_fatura" if status_antiga in ("paga", "parcial") else None
+                        )
+                        with container_linha_colorida(
+                            st, f"fatura_antiga_{fatura_antiga['id']}", tipo_cor_antiga
+                        ):
+                            col_a1, col_a2, col_a3, col_a4, col_a5 = st.columns(5)
+                            col_a1.write(fatura_antiga["mes_referencia"].strftime("%m/%Y"))
+                            col_a2.write(formatar_moeda(total_antiga))
+                            col_a3.write(fatura_antiga["data_vencimento"].strftime("%d/%m/%Y"))
+                            col_a4.write(STATUS_LABEL.get(status_antiga, status_antiga))
+                            if saldo_devedor_antiga > 0:
+                                if col_a5.button(
+                                    "Pagar", key=f"cartao_pagar_antiga_{fatura_antiga['id']}"
+                                ):
+                                    st.session_state["cartao_pagar_fatura_id"] = fatura_antiga["id"]
+                                    st.rerun()
 
             col_1, col_2, col_3 = st.columns(3)
             if col_1.button("Editar", key=f"cartao_editar_{cartao['id']}"):

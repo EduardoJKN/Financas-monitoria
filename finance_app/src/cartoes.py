@@ -11,7 +11,7 @@ from decimal import Decimal
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
-from src.banco_de_dados import ErroBancoDeDados, obter_engine
+from src.banco_de_dados import ErroBancoDeDados, conexao_usuario
 
 _NAO_INFORMADO = object()
 
@@ -59,7 +59,7 @@ def criar_cartao(
     _validar_dia(dia_vencimento, "dia_vencimento")
 
     try:
-        with obter_engine().begin() as conn:
+        with conexao_usuario() as conn:
             if conta_pagamento_id is not None:
                 _validar_conta_pagamento(conn, conta_pagamento_id)
 
@@ -92,7 +92,7 @@ def criar_cartao(
 
 def obter_cartao(id: int) -> dict | None:
     try:
-        with obter_engine().connect() as conn:
+        with conexao_usuario() as conn:
             linha = (
                 conn.execute(text("SELECT * FROM cartoes WHERE id = :id"), {"id": id})
                 .mappings()
@@ -110,7 +110,7 @@ def listar_cartoes(incluir_inativos: bool = False) -> list[dict]:
         consulta = text("SELECT * FROM cartoes WHERE ativo = true ORDER BY nome")
 
     try:
-        with obter_engine().connect() as conn:
+        with conexao_usuario() as conn:
             linhas = conn.execute(consulta).mappings().all()
             return [dict(linha) for linha in linhas]
     except SQLAlchemyError as exc:
@@ -137,7 +137,7 @@ def atualizar_cartao(
         _validar_dia(dia_vencimento, "dia_vencimento")
 
     try:
-        with obter_engine().begin() as conn:
+        with conexao_usuario() as conn:
             atual = (
                 conn.execute(text("SELECT * FROM cartoes WHERE id = :id"), {"id": id})
                 .mappings()
@@ -189,7 +189,7 @@ def excluir_cartao(id: int) -> None:
     """Exclui o cartão. Se houver faturas ou transações vinculadas, desativa
     em vez de excluir, preservando o histórico."""
     try:
-        with obter_engine().begin() as conn:
+        with conexao_usuario() as conn:
             tem_dependencias = conn.execute(
                 text(
                     """

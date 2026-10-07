@@ -6,7 +6,7 @@ from decimal import Decimal
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
-from src.banco_de_dados import ErroBancoDeDados, obter_engine
+from src.banco_de_dados import ErroBancoDeDados, conexao_usuario
 
 _NAO_INFORMADO = object()
 
@@ -60,7 +60,7 @@ def criar_meta(
     concluida = valor_atual >= valor_alvo
 
     try:
-        with obter_engine().begin() as conn:
+        with conexao_usuario() as conn:
             resultado = conn.execute(
                 text(
                     """
@@ -90,7 +90,7 @@ def criar_meta(
 
 def obter_meta(id: int) -> dict | None:
     try:
-        with obter_engine().connect() as conn:
+        with conexao_usuario() as conn:
             linha = (
                 conn.execute(text("SELECT * FROM metas WHERE id = :id"), {"id": id})
                 .mappings()
@@ -113,7 +113,7 @@ def listar_metas(apenas_em_andamento: bool = False) -> list[dict]:
         )
 
     try:
-        with obter_engine().connect() as conn:
+        with conexao_usuario() as conn:
             linhas = conn.execute(consulta).mappings().all()
             return [dict(linha) for linha in linhas]
     except SQLAlchemyError as exc:
@@ -139,7 +139,7 @@ def atualizar_meta(
         _validar_data_inicio(data_inicio)
 
     try:
-        with obter_engine().begin() as conn:
+        with conexao_usuario() as conn:
             atual = (
                 conn.execute(text("SELECT * FROM metas WHERE id = :id"), {"id": id})
                 .mappings()
@@ -183,7 +183,7 @@ def atualizar_meta(
 
 def excluir_meta(id: int) -> None:
     try:
-        with obter_engine().begin() as conn:
+        with conexao_usuario() as conn:
             resultado = conn.execute(text("DELETE FROM metas WHERE id = :id"), {"id": id})
             if resultado.rowcount == 0:
                 raise ValueError(f"Meta {id} não encontrada.")

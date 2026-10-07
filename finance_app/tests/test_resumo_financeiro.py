@@ -2,7 +2,7 @@ from datetime import date
 from decimal import Decimal
 
 from src import faturas, resumo_financeiro as resumo, transacoes
-from src.banco_de_dados import obter_engine
+from src.banco_de_dados import conexao_usuario
 
 
 def test_saldo_considera_receita_despesa_transferencia(conta_a, conta_b, categoria_despesa, categoria_receita):
@@ -63,7 +63,7 @@ def test_compra_no_cartao_nao_reduz_saldo_bancario_ate_pagamento(
         assert resultado_periodo_depois["total_despesas"] == Decimal("600.00")  # NÃO duplica
     finally:
         transacoes.excluir_transacao(tid)
-        with obter_engine().begin() as conn:
+        with conexao_usuario() as conn:
             from sqlalchemy import text
 
             conn.execute(text("DELETE FROM pagamentos_fatura WHERE conta_id = :id"), {"id": conta_a})

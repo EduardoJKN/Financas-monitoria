@@ -180,10 +180,10 @@ def test_atualizar_transacao_trocar_conta_para_cartao(conta_a, cartao_a, categor
         transacoes.excluir_transacao(tid)
         # a mudança para cartão criou uma fatura; remove para não deixar
         # resíduo nem impedir a exclusão "de vez" do cartão pela fixture.
-        from src.banco_de_dados import obter_engine
+        from src.banco_de_dados import conexao_usuario
         from sqlalchemy import text
 
-        with obter_engine().begin() as conn:
+        with conexao_usuario() as conn:
             conn.execute(
                 text("DELETE FROM faturas_cartao WHERE cartao_id = :id"), {"id": cartao_a}
             )

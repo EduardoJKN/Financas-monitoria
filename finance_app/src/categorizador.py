@@ -6,7 +6,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import SQLAlchemyError
 
-from src.banco_de_dados import ErroBancoDeDados, obter_engine
+from src.banco_de_dados import ErroBancoDeDados, conexao_usuario
 
 OPERADORES_REGRA = {"contem", "comeca_com", "igual"}
 
@@ -67,7 +67,7 @@ def criar_regra(
     _validar_prioridade(prioridade)
 
     try:
-        with obter_engine().begin() as conn:
+        with conexao_usuario() as conn:
             _validar_categoria_ativa(conn, categoria_id)
             resultado = conn.execute(
                 text(
@@ -92,7 +92,7 @@ def criar_regra(
 
 def obter_regra(id: int) -> dict | None:
     try:
-        with obter_engine().connect() as conn:
+        with conexao_usuario() as conn:
             linha = (
                 conn.execute(
                     text("SELECT * FROM regras_categorizacao WHERE id = :id"), {"id": id}
@@ -124,7 +124,7 @@ def listar_regras(
     )
 
     try:
-        with obter_engine().connect() as conn:
+        with conexao_usuario() as conn:
             linhas = conn.execute(consulta, parametros).mappings().all()
             return [dict(linha) for linha in linhas]
     except SQLAlchemyError as exc:
@@ -147,7 +147,7 @@ def atualizar_regra(
         _validar_prioridade(prioridade)
 
     try:
-        with obter_engine().begin() as conn:
+        with conexao_usuario() as conn:
             atual = (
                 conn.execute(
                     text("SELECT * FROM regras_categorizacao WHERE id = :id"), {"id": id}
@@ -193,7 +193,7 @@ def atualizar_regra(
 
 def excluir_regra(id: int) -> None:
     try:
-        with obter_engine().begin() as conn:
+        with conexao_usuario() as conn:
             resultado = conn.execute(
                 text("DELETE FROM regras_categorizacao WHERE id = :id"), {"id": id}
             )
@@ -232,7 +232,7 @@ def categorizar_descricao(descricao: str, tipo: str | None = None) -> int | None
     clausula_where = " AND ".join(condicoes)
 
     try:
-        with obter_engine().connect() as conn:
+        with conexao_usuario() as conn:
             linhas = (
                 conn.execute(
                     text(
@@ -281,7 +281,7 @@ def buscar_transacoes_compativeis_regra(
         return []
 
     try:
-        with obter_engine().connect() as conn:
+        with conexao_usuario() as conn:
             categoria = (
                 conn.execute(
                     text("SELECT tipo, ativa FROM categorias WHERE id = :id"),
@@ -365,7 +365,7 @@ def aplicar_regra_em_transacoes_existentes(
     regra = obter_regra(regra_id)
 
     try:
-        with obter_engine().begin() as conn:
+        with conexao_usuario() as conn:
             for tid in alvo_ids:
                 conn.execute(
                     text(
@@ -389,7 +389,7 @@ def prever_aplicacao_todas_regras() -> list[dict]:
     banco; apenas retorna o que SERIA feito.
     """
     try:
-        with obter_engine().connect() as conn:
+        with conexao_usuario() as conn:
             candidatas = (
                 conn.execute(
                     text(
@@ -429,7 +429,7 @@ def aplicar_todas_regras_em_transacoes_sem_categoria(transacao_ids: list[int]) -
         return 0
 
     try:
-        with obter_engine().begin() as conn:
+        with conexao_usuario() as conn:
             total = 0
             for tid in transacao_ids:
                 atual = (
