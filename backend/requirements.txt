@@ -1,0 +1,12 @@
+# Dependências próprias do backend FastAPI. A camada de negócio (contas,
+# categorias, transacoes, etc.) é reaproveitada de ../finance_app/src — por
+# isso este arquivo também instala as dependências desse pacote, em vez de
+# duplicar versões. Ver app/core/financas_path.py para como o import é
+# resolvido sem copiar nem mover o código do Streamlit.
+-r ../finance_app/requirements.txt
+
+fastapi
+uvicorn[standard]
+pydantic
+pyjwt[crypto]
+python-multipart
