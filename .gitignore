@@ -13,6 +13,16 @@ venv/
 env/
 .pytest_cache/
 
+# Node / Next.js
+node_modules/
+.next/
+out/
+dist/
+*.tsbuildinfo
+next-env.d.ts
+coverage/
+.turbo/
+
 # IDEs / editores
 .vscode/
 .idea/
