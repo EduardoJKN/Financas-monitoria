@@ -1,0 +1,98 @@
+@import "tailwindcss";
+
+/* Dark mode por classe (.dark no <html>) além do padrão de sistema — o
+ * toggle de tema (Parte 25) escreve essa classe; sem JS, cai no padrão do
+ * sistema via prefers-color-scheme abaixo. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  --background: #ffffff;
+  --foreground: #0f172a;
+  --superficie: #f8fafc;
+  --borda: #e2e8f0;
+  --muted: #64748b;
+  --primaria: #2563eb;
+  --primaria-foreground: #ffffff;
+
+  /* Cores semânticas de lançamento — sempre acompanhadas de ícone/texto,
+   * nunca só a cor (Parte 29: não depender somente de cor). */
+  --receita-fundo: rgba(22, 163, 74, 0.12);
+  --receita-texto: #15803d;
+  --despesa-fundo: rgba(220, 38, 38, 0.12);
+  --despesa-texto: #b91c1c;
+  --transferencia-fundo: rgba(37, 99, 235, 0.12);
+  --transferencia-texto: #1d4ed8;
+  --fatura-fundo: rgba(147, 51, 234, 0.12);
+  --fatura-texto: #7e22ce;
+}
+
+.dark {
+  --background: #0b0f19;
+  --foreground: #e2e8f0;
+  --superficie: #131a2a;
+  --borda: #1f2937;
+  --muted: #94a3b8;
+  --primaria: #3b82f6;
+  --primaria-foreground: #0b0f19;
+
+  --receita-fundo: rgba(34, 197, 94, 0.16);
+  --receita-texto: #4ade80;
+  --despesa-fundo: rgba(239, 68, 68, 0.16);
+  --despesa-texto: #f87171;
+  --transferencia-fundo: rgba(59, 130, 246, 0.16);
+  --transferencia-texto: #60a5fa;
+  --fatura-fundo: rgba(168, 85, 247, 0.18);
+  --fatura-texto: #c084fc;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not(.light) {
+    --background: #0b0f19;
+    --foreground: #e2e8f0;
+    --superficie: #131a2a;
+    --borda: #1f2937;
+    --muted: #94a3b8;
+    --primaria: #3b82f6;
+    --primaria-foreground: #0b0f19;
+
+    --receita-fundo: rgba(34, 197, 94, 0.16);
+    --receita-texto: #4ade80;
+    --despesa-fundo: rgba(239, 68, 68, 0.16);
+    --despesa-texto: #f87171;
+    --transferencia-fundo: rgba(59, 130, 246, 0.16);
+    --transferencia-texto: #60a5fa;
+    --fatura-fundo: rgba(168, 85, 247, 0.18);
+    --fatura-texto: #c084fc;
+  }
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-superficie: var(--superficie);
+  --color-borda: var(--borda);
+  --color-muted: var(--muted);
+  --color-primaria: var(--primaria);
+  --color-primaria-foreground: var(--primaria-foreground);
+  --color-receita-fundo: var(--receita-fundo);
+  --color-receita-texto: var(--receita-texto);
+  --color-despesa-fundo: var(--despesa-fundo);
+  --color-despesa-texto: var(--despesa-texto);
+  --color-transferencia-fundo: var(--transferencia-fundo);
+  --color-transferencia-texto: var(--transferencia-texto);
+  --color-fatura-fundo: var(--fatura-fundo);
+  --color-fatura-texto: var(--fatura-texto);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+}
+
+/* Foco visível em qualquer elemento interativo (Parte 29 — acessibilidade) */
+:focus-visible {
+  outline: 2px solid var(--primaria);
+  outline-offset: 2px;
+}
