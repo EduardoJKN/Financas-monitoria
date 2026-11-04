@@ -30,6 +30,12 @@ class ErroContextoUsuario(ErroBancoDeDados):
 # ---------------------------------------------------------------------
 _usuario_atual: ContextVar[str | None] = ContextVar("usuario_atual", default=None)
 
+# Conexão compartilhada opcional (ver transacao_compartilhada()) — None
+# significa "sem otimização ativa", comportamento 100% inalterado.
+_conexao_compartilhada: ContextVar[Connection | None] = ContextVar(
+    "conexao_compartilhada", default=None
+)
+
 
 def definir_usuario_atual(usuario_id) -> None:
     """Define o usuário autenticado do contexto atual. Toda página que
@@ -99,6 +105,48 @@ def conexao_usuario() -> Connection:
     PostgreSQL (RLS) às linhas do usuário atual — não depende de nenhuma
     cláusula WHERE adicional no código Python. Levanta ErroContextoUsuario
     se nenhum usuário estiver definido no contexto atual.
+
+    Se chamada dentro de um bloco `with transacao_compartilhada():`,
+    reaproveita a conexão já aberta em vez de abrir uma nova — ver essa
+    função para o motivo (reduz round-trips de rede em endpoints que
+    agregam várias consultas, ex.: dashboard). Fora desse bloco (o caso
+    comum, incluindo todo o Streamlit), o comportamento é exatamente o de
+    sempre: uma conexão nova por chamada.
+    """
+    usuario_id = _usuario_atual.get()
+    if not usuario_id:
+        raise ErroContextoUsuario(
+            "Nenhum usuário autenticado no contexto atual. Faça login antes "
+            "de acessar dados."
+        )
+
+    conexao_existente = _conexao_compartilhada.get()
+    if conexao_existente is not None:
+        yield conexao_existente
+        return
+
+    with obter_engine_app().begin() as conn:
+        conn.execute(
+            text("SELECT set_config('app.usuario_id', :uid, true)"), {"uid": usuario_id}
+        )
+        yield conn
+
+
+@contextmanager
+def transacao_compartilhada() -> Connection:
+    """Otimização de transporte, opcional e aditiva: abre UMA conexão e a
+    disponibiliza para todas as chamadas de conexao_usuario() feitas
+    dentro deste bloco, em vez de cada uma abrir sua própria conexão —
+    medido em produção, cada round-trip ao Postgres custa ~900ms de
+    latência de rede neste ambiente, e endpoints agregados (ex.:
+    dashboard) chamam conexao_usuario() internamente mais de dez vezes.
+
+    Use apenas para fluxos SOMENTE LEITURA: como todas as chamadas
+    aninhadas compartilham a mesma transação, uma falha em QUALQUER uma
+    delas desfaz (rollback) tudo que foi feito no bloco — o que nunca é um
+    problema para SELECTs, mas pode surpreender se usado com escritas
+    independentes. Nunca muda isolamento por RLS: set_config continua
+    sendo aplicado normalmente.
     """
     usuario_id = _usuario_atual.get()
     if not usuario_id:
@@ -110,4 +158,8 @@ def conexao_usuario() -> Connection:
         conn.execute(
             text("SELECT set_config('app.usuario_id', :uid, true)"), {"uid": usuario_id}
         )
-        yield conn
+        token = _conexao_compartilhada.set(conn)
+        try:
+            yield conn
+        finally:
+            _conexao_compartilhada.reset(token)

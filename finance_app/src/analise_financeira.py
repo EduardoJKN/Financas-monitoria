@@ -293,6 +293,21 @@ def _percentil(valores_ordenados: list[Decimal], percentil: Decimal) -> Decimal:
     return inferior + (superior - inferior) * fracao
 
 
+def _faixa_normal_iqr(valores: list[Decimal]) -> tuple[Decimal, Decimal, Decimal] | None:
+    """(q1, q3, limite_superior) pela regra do IQR, ou None se a amostra for
+    pequena demais (< AMOSTRA_MINIMA_ANOMALIA) ou o limite não fizer sentido
+    (<= 0)."""
+    if len(valores) < AMOSTRA_MINIMA_ANOMALIA:
+        return None
+    valores_ordenados = sorted(valores)
+    q1 = _percentil(valores_ordenados, Decimal("25"))
+    q3 = _percentil(valores_ordenados, Decimal("75"))
+    limite_superior = q3 + (q3 - q1) * Decimal("1.5")
+    if limite_superior <= 0:
+        return None
+    return q1, q3, limite_superior
+
+
 def detectar_lancamentos_fora_padrao(
     categoria_id: int, data_inicial: date, data_final: date
 ) -> list[dict]:
@@ -308,14 +323,64 @@ def detectar_lancamentos_fora_padrao(
         data_inicial=data_inicial,
         data_final=data_final,
     )
-    if len(lancamentos) < AMOSTRA_MINIMA_ANOMALIA:
+    faixa = _faixa_normal_iqr([l["valor"] for l in lancamentos])
+    if faixa is None:
         return []
-
-    valores = sorted(lancamento["valor"] for lancamento in lancamentos)
-    q1 = _percentil(valores, Decimal("25"))
-    q3 = _percentil(valores, Decimal("75"))
-    limite_superior = q3 + (q3 - q1) * Decimal("1.5")
-    if limite_superior <= 0:
-        return []
+    _, _, limite_superior = faixa
 
     return [l for l in lancamentos if l["valor"] > limite_superior]
+
+
+def gastos_fora_padrao_do_mes(
+    referencia: date | None = None, meses_historico: int = 6
+) -> list[dict]:
+    """Despesas do mês de `referencia` (hoje, por padrão) que fogem do padrão
+    histórico da própria categoria — Parte 20 ("Gastos fora do padrão").
+
+    Mesma regra de `detectar_lancamentos_fora_padrao` (IQR), mas: (1) aplicada
+    automaticamente a todas as categorias com despesa no mês, não só a uma; e
+    (2) a amostra usada para calcular o "normal" é uma janela histórica de
+    `meses_historico` meses (inclui o mês atual), não só o próprio mês — do
+    contrário, qualquer mês com poucos lançamentos teria uma noção pobre de
+    "normal". Cada resultado inclui a faixa normal (q1/q3) para a mensagem
+    explicativa na UI ("normalmente entre R$X e R$Y") — nunca só a marcação
+    binária de anomalia."""
+    referencia = referencia or date.today()
+    inicio_mes, fim_mes = _periodo_mes(referencia)
+    inicio_historico = avancar_meses(inicio_mes, -(meses_historico - 1))
+
+    resultado = []
+    for linha in despesas_por_categoria(inicio_mes, fim_mes):
+        categoria_id = linha["categoria_id"]
+        if categoria_id is None:
+            continue
+        lancamentos_historico = transacoes_modulo.listar_transacoes(
+            tipo="despesa",
+            categoria_id=categoria_id,
+            data_inicial=inicio_historico,
+            data_final=fim_mes,
+        )
+        faixa = _faixa_normal_iqr([l["valor"] for l in lancamentos_historico])
+        if faixa is None:
+            continue
+        q1, q3, limite_superior = faixa
+
+        for lancamento in lancamentos_historico:
+            if lancamento["data_transacao"] < inicio_mes:
+                continue
+            if lancamento["valor"] <= limite_superior:
+                continue
+            resultado.append(
+                {
+                    "transacao_id": lancamento["id"],
+                    "categoria_id": categoria_id,
+                    "categoria": linha["categoria"],
+                    "descricao": lancamento["descricao"],
+                    "valor": lancamento["valor"],
+                    "data_transacao": lancamento["data_transacao"],
+                    "faixa_normal_min": q1,
+                    "faixa_normal_max": q3,
+                }
+            )
+
+    return sorted(resultado, key=lambda r: r["valor"], reverse=True)

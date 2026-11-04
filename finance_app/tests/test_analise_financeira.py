@@ -256,6 +256,41 @@ def test_detectar_anomalia_amostra_insuficiente_nao_marca_nada(conta_a, categori
             transacoes.excluir_transacao(tid)
 
 
+def test_gastos_fora_padrao_do_mes_usa_historico_e_so_retorna_mes_atual(conta_a, categoria_despesa):
+    # Amostra histórica (meses anteriores) estabelece o "normal" ~50; a
+    # anomalia de verdade é lançada DENTRO do mês de referência (outubro).
+    ids = [
+        _criar_despesa(conta_a, categoria_despesa, "50.00", date(2026, 7, 3)),
+        _criar_despesa(conta_a, categoria_despesa, "52.00", date(2026, 8, 3)),
+        _criar_despesa(conta_a, categoria_despesa, "48.00", date(2026, 9, 3)),
+        _criar_despesa(conta_a, categoria_despesa, "51.00", date(2026, 9, 20)),
+        _criar_despesa(conta_a, categoria_despesa, "49.00", date(2026, 10, 2)),
+        _criar_despesa(conta_a, categoria_despesa, "900.00", date(2026, 10, 10), "Fora do padrão"),
+    ]
+    try:
+        resultado = af.gastos_fora_padrao_do_mes(REFERENCIA)
+        assert len(resultado) == 1
+        item = resultado[0]
+        assert item["descricao"] == "Fora do padrão"
+        assert item["categoria_id"] == categoria_despesa
+        assert item["faixa_normal_min"] <= item["faixa_normal_max"]
+    finally:
+        for tid in ids:
+            transacoes.excluir_transacao(tid)
+
+
+def test_gastos_fora_padrao_do_mes_amostra_insuficiente_nao_marca_nada(conta_a, categoria_despesa):
+    ids = [
+        _criar_despesa(conta_a, categoria_despesa, "50.00", date(2026, 10, 1)),
+        _criar_despesa(conta_a, categoria_despesa, "900.00", date(2026, 10, 5)),
+    ]
+    try:
+        assert af.gastos_fora_padrao_do_mes(REFERENCIA) == []
+    finally:
+        for tid in ids:
+            transacoes.excluir_transacao(tid)
+
+
 # ---------------------------------------------------------------------
 # Isolamento por usuário: analytics nunca mistura dados de usuários
 # ---------------------------------------------------------------------

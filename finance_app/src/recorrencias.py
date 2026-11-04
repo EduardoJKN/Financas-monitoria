@@ -390,3 +390,42 @@ def gerar_lancamentos_pendentes(hoje: date | None = None) -> dict:
             }
     except SQLAlchemyError as exc:
         raise ErroBancoDeDados("Falha ao gerar lançamentos recorrentes.") from exc
+
+
+# ---------------------------------------------------------------------
+# Projeção de próximas ocorrências (leitura apenas — compromissos futuros)
+# ---------------------------------------------------------------------
+def projetar_proximas_ocorrencias(id: int, quantidade: int = 6) -> list[date]:
+    """Projeta as próximas `quantidade` datas de ocorrência de uma
+    recorrência, sem gerar nenhum lançamento (somente leitura). Reaproveita
+    o mesmo cálculo de data usado por gerar_lancamentos_pendentes
+    (_data_ocorrencia), a partir da contagem de lançamentos já gerados —
+    por isso nunca projeta uma data que já foi efetivamente lançada.
+    Respeita data_fim quando definida. Recorrência inativa retorna lista
+    vazia."""
+    recorrencia = obter_recorrencia(id)
+    if recorrencia is None:
+        raise ValueError(f"Recorrência {id} não encontrada.")
+    if not recorrencia["ativa"]:
+        return []
+
+    try:
+        with conexao_usuario() as conn:
+            indice = conn.execute(
+                text("SELECT COUNT(*) FROM transacoes WHERE recorrencia_id = :id"), {"id": id}
+            ).scalar_one()
+    except SQLAlchemyError as exc:
+        raise ErroBancoDeDados("Falha ao projetar próximas ocorrências.") from exc
+
+    data_fim = recorrencia["data_fim"]
+    periodicidade = recorrencia["periodicidade"]
+    data_inicio = recorrencia["data_inicio"]
+
+    datas: list[date] = []
+    while len(datas) < quantidade:
+        candidata = _data_ocorrencia(data_inicio, periodicidade, indice)
+        if data_fim is not None and candidata > data_fim:
+            break
+        datas.append(candidata)
+        indice += 1
+    return datas

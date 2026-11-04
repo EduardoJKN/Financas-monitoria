@@ -6,7 +6,7 @@ import streamlit as st
 
 from src import cartoes as cartoes_modulo
 from src import categorias as categorias_modulo
-from src import categorizador, contas, faturas as faturas_modulo, importador, ofx as ofx_modulo, transacoes
+from src import categorizador, contas, faturas as faturas_modulo, importador, importacao_execucao, ofx as ofx_modulo, transacoes
 from src import resumo_financeiro as resumo_modulo
 from src.banco_de_dados import ErroBancoDeDados
 from src.categorizador import normalizar_texto
@@ -529,56 +529,17 @@ if st.button("Importar lançamentos selecionados", type="primary", key="imp_conf
             ignoradas += 1
             continue
         try:
-            if linha["classificacao"] == "transferencia":
-                conta_origem_id, conta_destino_final_id = importador.resolver_contas_transferencia(
-                    linha["tipo"], conta_id_importacao, linha["outra_conta_id"]
-                )
-                transacoes.criar_transacao(
-                    tipo="transferencia",
-                    descricao=linha["descricao"],
-                    valor=linha["valor"],
-                    data_transacao=linha["data"],
-                    conta_id=conta_origem_id,
-                    conta_destino_id=conta_destino_final_id,
-                    origem="importacao",
-                )
-            elif linha["classificacao"] == "pagamento_fatura":
-                fatura_compativel = faturas_modulo.fatura_compativel_para_pagamento(
-                    linha["cartao_vinculado_id"], linha["data"]
-                )
-                if fatura_compativel is None:
-                    # Nunca converte silenciosamente em despesa comum: sem
-                    # fatura compatível e sem decisão explícita (despesa
-                    # comum / não importar) tomada na prévia, a linha não é
-                    # importada — evita tanto "perder" o lançamento quanto
-                    # dupla contagem por engano.
-                    com_erro += 1
-                    erros_insercao.append(
-                        (
-                            linha["indice"],
-                            linha["descricao"],
-                            "Nenhuma fatura compatível encontrada para o cartão escolhido; "
-                            "linha não importada. Volte à prévia e escolha \"manter como "
-                            "despesa comum\" ou \"não importar\".",
-                        )
-                    )
-                    continue
-                # Pagamento de fatura: reduz o saldo da conta e registra o
-                # pagamento — nunca também como despesa comum (evita dupla
-                # contagem, já que a compra já foi contada na fatura).
-                faturas_modulo.registrar_pagamento_fatura(
-                    fatura_compativel["id"], conta_id_importacao, linha["valor"], linha["data"]
-                )
-            else:
-                transacoes.criar_transacao(
-                    tipo=linha["tipo"],
-                    descricao=linha["descricao"],
-                    valor=linha["valor"],
-                    data_transacao=linha["data"],
-                    conta_id=conta_id_importacao,
-                    categoria_id=linha["categoria_id"],
-                    origem="importacao",
-                )
+            importacao_execucao.confirmar_linha(
+                classificacao=linha["classificacao"],
+                tipo=linha["tipo"],
+                descricao=linha["descricao"],
+                valor=linha["valor"],
+                data_transacao=linha["data"],
+                conta_id_importacao=conta_id_importacao,
+                categoria_id=linha["categoria_id"],
+                outra_conta_id=linha["outra_conta_id"],
+                cartao_vinculado_id=linha["cartao_vinculado_id"],
+            )
             importadas += 1
         except (ValueError, ErroBancoDeDados) as exc:
             com_erro += 1
