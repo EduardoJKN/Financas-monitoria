@@ -6,6 +6,7 @@ import { FormEvent, useState } from "react";
 
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
+import { reenviarConfirmacaoDeCadastro } from "@/lib/auth/reenviarConfirmacao";
 import { criarClienteNavegador } from "@/lib/supabase/client";
 
 export default function PaginaEntrar() {
@@ -43,8 +44,7 @@ export default function PaginaEntrar() {
   async function reenviarConfirmacao() {
     setReenviando(true);
     setMensagemReenvio(null);
-    const supabase = criarClienteNavegador();
-    await supabase.auth.resend({ type: "signup", email });
+    await reenviarConfirmacaoDeCadastro(email);
     setReenviando(false);
     setMensagemReenvio("Se essa conta existir e ainda não estiver confirmada, enviamos um novo e-mail.");
   }
