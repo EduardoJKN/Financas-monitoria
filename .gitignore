@@ -36,3 +36,8 @@ coverage/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Planos/documentos internos gerados por ferramentas de IA — não fazem
+# parte do produto (já havia uma regra equivalente em finance_app/.gitignore,
+# que só cobre aquele subdiretório; esta cobre o resto do repo).
+docs/superpowers/

@@ -15,4 +15,7 @@ WORKDIR /app/backend
 ENV PYTHONUNBUFFERED=1
 
 EXPOSE 8000
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Forma shell (não exec) de propósito: $PORT precisa ser expandido em tempo
+# de execução — hospedagens como Koyeb injetam essa variável, e nunca é
+# 8001 (porta reservada só para desenvolvimento local no Windows).
+CMD uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}

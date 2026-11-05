@@ -34,10 +34,14 @@ def supabase_url() -> str:
     return _obrigatoria("SUPABASE_URL").rstrip("/")
 
 
-def frontend_url() -> str:
-    """Origem permitida para CORS. Padrão de desenvolvimento:
-    http://localhost:3000 — nunca "*" (há rotas autenticadas)."""
-    return os.getenv("FRONTEND_URL", "http://localhost:3000").rstrip("/")
+def origens_permitidas() -> list[str]:
+    """Origens aceitas por CORS. FRONTEND_URL pode conter uma única origem
+    ou várias separadas por vírgula (ex.: produção + preview da Vercel,
+    mantendo localhost:3000 em desenvolvimento) — nunca "*" (há rotas
+    autenticadas). Padrão sem a variável definida: http://localhost:3000."""
+    bruto = os.getenv("FRONTEND_URL", "http://localhost:3000")
+    origens = (parte.strip().rstrip("/") for parte in bruto.split(","))
+    return [origem for origem in origens if origem]
 
 
 def ambiente() -> str:

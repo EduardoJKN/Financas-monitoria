@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1.router import router_v1
-from app.core.config import frontend_url
+from app.core.config import origens_permitidas
 from app.core.erros import registrar_handlers_erro
 from app.core.timing import TimingMiddleware
 
@@ -19,7 +19,7 @@ app = FastAPI(
 # autenticadas (Parte 39).
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[frontend_url()],
+    allow_origins=origens_permitidas(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

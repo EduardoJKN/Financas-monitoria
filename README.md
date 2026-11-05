@@ -114,20 +114,11 @@ Com o backend rodando, `http://localhost:8001/docs` (Swagger/OpenAPI, organizado
 por tags: Contas, Categorias, Lançamentos, Cartões, Importação, Metas, Simulador,
 Dashboard, Compromissos futuros).
 
-## Deploy (preparado, não executado)
+## Deploy
 
-- **Frontend**: `npm run build` passa limpo; pronto para Vercel (ou equivalente).
-  Variáveis `NEXT_PUBLIC_*` como env vars do projeto.
-- **Backend**: sobe com `uvicorn app.main:app`; ver `backend/Dockerfile` (contexto
-  de build é a RAIZ do repo, não `backend/`, porque a imagem também precisa de
-  `finance_app/`: `docker build -f backend/Dockerfile .`). Pronto para
-  Render/Railway/Koyeb/Fly.io (planos gratuitos). CORS restrito a `FRONTEND_URL`
-  — nunca `*`.
-- **Streamlit**: inalterado, mesma forma de sempre (ex.: Streamlit Community Cloud).
-
-Nenhum segredo no código-fonte em nenhum dos três. Ver `.env.example` de cada
-diretório e os `.gitignore` (raiz cobre Python; `frontend/.gitignore` cobre
-Node/Next.js).
+Guia completo (variáveis, Koyeb, Vercel, Supabase, PWA, troubleshooting) em
+[`DEPLOY.md`](./DEPLOY.md). Nenhum segredo no código-fonte em nenhuma das
+três partes — ver `.env.example` de cada diretório.
 
 ## O que NÃO foi feito agora (de propósito)
 
